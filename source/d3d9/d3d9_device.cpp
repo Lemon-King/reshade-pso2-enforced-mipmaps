@@ -291,7 +291,7 @@ void    STDMETHODCALLTYPE Direct3DDevice9::GetGammaRamp(UINT iSwapChain, D3DGAMM
 }
 HRESULT STDMETHODCALLTYPE Direct3DDevice9::CreateTexture(UINT Width, UINT Height, UINT Levels, DWORD Usage, D3DFORMAT Format, D3DPOOL Pool, IDirect3DTexture9 **ppTexture, HANDLE *pSharedHandle)
 {
-	HRESULT texture = _orig->CreateTexture(Width, Height, Levels, Usage, Format, Pool, ppTexture, pSharedHandle);
+	HRESULT result = _orig->CreateTexture(Width, Height, Levels, Usage, Format, Pool, ppTexture, pSharedHandle);
 
 	// Lets exclude these types to prevent any rendering bugs.
 	DWORD excludeUsages = D3DUSAGE_DEPTHSTENCIL | D3DUSAGE_DONOTCLIP | D3DUSAGE_DYNAMIC | D3DUSAGE_RENDERTARGET | D3DUSAGE_RTPATCHES | D3DUSAGE_SOFTWAREPROCESSING | D3DUSAGE_RESTRICTED_CONTENT | D3DUSAGE_RESTRICT_SHARED_RESOURCE | D3DUSAGE_RESTRICT_SHARED_RESOURCE_DRIVER;
@@ -300,7 +300,7 @@ HRESULT STDMETHODCALLTYPE Direct3DDevice9::CreateTexture(UINT Width, UINT Height
 		(*ppTexture)->GenerateMipSubLevels();
 	}
 
-	return texture;
+	return result;
 }
 HRESULT STDMETHODCALLTYPE Direct3DDevice9::CreateVolumeTexture(UINT Width, UINT Height, UINT Depth, UINT Levels, DWORD Usage, D3DFORMAT Format, D3DPOOL Pool, IDirect3DVolumeTexture9 **ppVolumeTexture, HANDLE *pSharedHandle)
 {
@@ -308,7 +308,10 @@ HRESULT STDMETHODCALLTYPE Direct3DDevice9::CreateVolumeTexture(UINT Width, UINT 
 }
 HRESULT STDMETHODCALLTYPE Direct3DDevice9::CreateCubeTexture(UINT EdgeLength, UINT Levels, DWORD Usage, D3DFORMAT Format, D3DPOOL Pool, IDirect3DCubeTexture9 **ppCubeTexture, HANDLE *pSharedHandle)
 {
-	return _orig->CreateCubeTexture(EdgeLength, Levels, Usage, Format, Pool, ppCubeTexture, pSharedHandle);
+	// 0 forces mip map generatation
+	int level = _implicit_swapchain->_runtime->_texture_filering_level == 0 ? Levels : 0;
+	HRESULT result = _orig->CreateCubeTexture(EdgeLength, level, Usage, Format, Pool, ppCubeTexture, pSharedHandle);
+	return result;
 }
 HRESULT STDMETHODCALLTYPE Direct3DDevice9::CreateVertexBuffer(UINT Length, DWORD Usage, DWORD FVF, D3DPOOL Pool, IDirect3DVertexBuffer9 **ppVertexBuffer, HANDLE *pSharedHandle)
 {
@@ -513,13 +516,21 @@ HRESULT STDMETHODCALLTYPE Direct3DDevice9::GetSamplerState(DWORD Sampler, D3DSAM
 HRESULT STDMETHODCALLTYPE Direct3DDevice9::SetSamplerState(DWORD Sampler, D3DSAMPLERSTATETYPE Type, DWORD Value)
 {
 	// Hacky but it works, I guess.
-	_orig->SetSamplerState(Sampler, D3DSAMP_MAGFILTER, D3DTEXF_ANISOTROPIC);
-	_orig->SetSamplerState(Sampler, D3DSAMP_MINFILTER, D3DTEXF_ANISOTROPIC);
-	_orig->SetSamplerState(Sampler, D3DSAMP_MAXANISOTROPY, D3DTEXF_ANISOTROPIC);
+	int tfl = _implicit_swapchain->_runtime->_texture_filering_level;
+	if (tfl == 0) {
+		return _orig->SetSamplerState(Sampler, Type, Value);
+	}
+
+	D3DTEXTUREFILTERTYPE filterType = (D3DTEXTUREFILTERTYPE)std::clamp(tfl+1, 2, 3);
+	_orig->SetSamplerState(Sampler, D3DSAMP_MAGFILTER, filterType);
+	_orig->SetSamplerState(Sampler, D3DSAMP_MINFILTER, filterType);
 	if (Type == D3DSAMP_ADDRESSU || Type == D3DSAMP_ADDRESSV) {
 		_orig->SetSamplerState(Sampler, Type, Value);
 	}
-	return _orig->SetSamplerState(Sampler, D3DSAMP_MIPFILTER, D3DTEXF_ANISOTROPIC);
+	if (tfl > 1) {
+		_orig->SetSamplerState(Sampler, D3DSAMP_MAXANISOTROPY, 1<<tfl-1);
+	}
+	return _orig->SetSamplerState(Sampler, D3DSAMP_MIPFILTER, filterType);
 }
 HRESULT STDMETHODCALLTYPE Direct3DDevice9::ValidateDevice(DWORD *pNumPasses)
 {

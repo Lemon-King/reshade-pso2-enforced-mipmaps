@@ -90,6 +90,17 @@ reshade::d3d9::runtime_d3d9::runtime_d3d9(IDirect3DDevice9 *device, IDirect3DSwa
 		config.set("DX9_BUFFER_DETECTION", "UseAspectRatioHeuristics", _filter_aspect_ratio);
 	});
 #endif
+
+
+	subscribe_to_ui("PSO2 Overrides", [this]() {
+		draw_pso2_override_menu();
+	});
+	subscribe_to_load_config([this](const ini_file &config) {
+		config.get("PSO2_OVERRIDES", "TextureFilteringLevel", _texture_filering_level);
+	});
+	subscribe_to_save_config([this](ini_file &config) {
+		config.set("PSO2_OVERRIDES", "TextureFilteringLevel", _texture_filering_level);
+	});
 }
 reshade::d3d9::runtime_d3d9::~runtime_d3d9()
 {
@@ -1241,3 +1252,29 @@ void reshade::d3d9::runtime_d3d9::update_depth_texture_bindings(com_ptr<IDirect3
 	}
 }
 #endif
+
+void reshade::d3d9::runtime_d3d9::draw_pso2_override_menu()
+{
+	ImGui::TextColored(ImColor(204, 204, 0), "Some changes will require a restart of Phantasy Star Online 2.");
+
+	ImGui::Spacing();
+	ImGui::Separator();
+	ImGui::Spacing();
+
+	const char* const filtering_levels[] = {
+		"Default",
+		"Trilinear",
+		"Anisotropic x2",
+		"Anisotropic x4",
+		"Anisotropic x8",
+		"Anisotropic x16",
+	};
+	_pso2_override_needs_save |= ImGui::Combo("Texture Filtering", (int*)&_texture_filering_level, filtering_levels, IM_ARRAYSIZE(filtering_levels), 4);
+
+	ImGui::Spacing();
+	ImGui::Separator();
+	ImGui::Spacing();
+
+	if (_pso2_override_needs_save)
+		runtime::save_config();
+}

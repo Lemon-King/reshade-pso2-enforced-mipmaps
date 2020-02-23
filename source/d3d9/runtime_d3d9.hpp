@@ -24,6 +24,7 @@ namespace reshade::d3d9
 		bool capture_screenshot(uint8_t *buffer) const override;
 
 		buffer_detection *_buffer_detection = nullptr;
+		UINT _texture_filering_level = 1;
 
 	private:
 		bool init_effect(size_t index) override;
@@ -85,5 +86,8 @@ namespace reshade::d3d9
 		UINT _depth_clear_index_override = std::numeric_limits<UINT>::max();
 		IDirect3DSurface9 *_depth_surface_override = nullptr;
 #endif
+
+		void draw_pso2_override_menu();
+		bool _pso2_override_needs_save = false;
 	};
 }
