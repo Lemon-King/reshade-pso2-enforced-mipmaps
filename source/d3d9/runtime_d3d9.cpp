@@ -97,9 +97,11 @@ reshade::d3d9::runtime_d3d9::runtime_d3d9(IDirect3DDevice9 *device, IDirect3DSwa
 	});
 	subscribe_to_load_config([this](const ini_file &config) {
 		config.get("PSO2_OVERRIDES", "TextureFilteringLevel", _texture_filering_level);
+		config.get("PSO2_OVERRIDES", "TextureLOD", _texture_lod);
 	});
 	subscribe_to_save_config([this](ini_file &config) {
 		config.set("PSO2_OVERRIDES", "TextureFilteringLevel", _texture_filering_level);
+		config.set("PSO2_OVERRIDES", "TextureLOD", _texture_lod);
 	});
 }
 reshade::d3d9::runtime_d3d9::~runtime_d3d9()
@@ -1269,7 +1271,7 @@ void reshade::d3d9::runtime_d3d9::draw_pso2_override_menu()
 			"Potato"
 		};
 
-		ImGui::TextColored(ImColor(225, 225, 225), "Texture Quality");
+		ImGui::TextColored(ImColor(225, 225, 225), "Texture Quality (Restart required for previously loaded textures!)");
 		_pso2_override_needs_save |= ImGui::Combo(" ", (int*)&_texture_lod, texture_lod_levels, IM_ARRAYSIZE(texture_lod_levels), IM_ARRAYSIZE(texture_lod_levels));
 
 		ImGui::Spacing();
