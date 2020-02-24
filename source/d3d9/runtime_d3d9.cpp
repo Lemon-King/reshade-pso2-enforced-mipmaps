@@ -1267,9 +1267,9 @@ void reshade::d3d9::runtime_d3d9::draw_pso2_override_menu()
 		"Anisotropic x2",
 		"Anisotropic x4",
 		"Anisotropic x8",
-		"Anisotropic x16",
+		"Anisotropic x16"
 	};
-	_pso2_override_needs_save |= ImGui::Combo("Texture Filtering", (int*)&_texture_filering_level, filtering_levels, IM_ARRAYSIZE(filtering_levels), 4);
+	_pso2_override_needs_save |= ImGui::Combo("Texture Filtering", (int*)&_texture_filering_level, filtering_levels, IM_ARRAYSIZE(filtering_levels), IM_ARRAYSIZE(filtering_levels));
 
 	ImGui::Spacing();
 	ImGui::Separator();

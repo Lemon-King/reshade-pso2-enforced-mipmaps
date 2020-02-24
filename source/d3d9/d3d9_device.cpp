@@ -521,14 +521,14 @@ HRESULT STDMETHODCALLTYPE Direct3DDevice9::SetSamplerState(DWORD Sampler, D3DSAM
 		return _orig->SetSamplerState(Sampler, Type, Value);
 	}
 
-	D3DTEXTUREFILTERTYPE filterType = (D3DTEXTUREFILTERTYPE)std::clamp(tfl+1, 2, 3);
+	D3DTEXTUREFILTERTYPE filterType = (D3DTEXTUREFILTERTYPE)std::clamp(tfl+1, 1, 3);
 	_orig->SetSamplerState(Sampler, D3DSAMP_MAGFILTER, filterType);
 	_orig->SetSamplerState(Sampler, D3DSAMP_MINFILTER, filterType);
 	if (Type == D3DSAMP_ADDRESSU || Type == D3DSAMP_ADDRESSV) {
 		_orig->SetSamplerState(Sampler, Type, Value);
 	}
 	if (tfl > 1) {
-		_orig->SetSamplerState(Sampler, D3DSAMP_MAXANISOTROPY, 1<<tfl-1);
+		_orig->SetSamplerState(Sampler, D3DSAMP_MAXANISOTROPY, 1<<(tfl-1));
 	}
 	return _orig->SetSamplerState(Sampler, D3DSAMP_MIPFILTER, filterType);
 }

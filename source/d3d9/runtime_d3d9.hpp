@@ -24,7 +24,7 @@ namespace reshade::d3d9
 		bool capture_screenshot(uint8_t *buffer) const override;
 
 		buffer_detection *_buffer_detection = nullptr;
-		UINT _texture_filering_level = 1;
+		UINT _texture_filering_level = 3;
 
 	private:
 		bool init_effect(size_t index) override;
