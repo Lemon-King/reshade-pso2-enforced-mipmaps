@@ -294,7 +294,7 @@ HRESULT STDMETHODCALLTYPE Direct3DDevice9::CreateTexture(UINT Width, UINT Height
 	HRESULT result = _orig->CreateTexture(Width, Height, Levels, Usage, Format, Pool, ppTexture, pSharedHandle);
 
 	// Lets exclude these types to prevent any rendering bugs.
-	DWORD excludeUsages = D3DUSAGE_DEPTHSTENCIL | D3DUSAGE_DONOTCLIP | D3DUSAGE_DYNAMIC | D3DUSAGE_RENDERTARGET | D3DUSAGE_RTPATCHES | D3DUSAGE_SOFTWAREPROCESSING | D3DUSAGE_RESTRICTED_CONTENT | D3DUSAGE_RESTRICT_SHARED_RESOURCE | D3DUSAGE_RESTRICT_SHARED_RESOURCE_DRIVER;
+	DWORD excludeUsages = D3DUSAGE_DEPTHSTENCIL | D3DUSAGE_DONOTCLIP | D3DUSAGE_DYNAMIC | D3DUSAGE_RENDERTARGET | D3DUSAGE_RTPATCHES | D3DUSAGE_SOFTWAREPROCESSING | D3DUSAGE_RESTRICTED_CONTENT | D3DUSAGE_RESTRICT_SHARED_RESOURCE | D3DUSAGE_RESTRICT_SHARED_RESOURCE_DRIVER | D3DUSAGE_QUERY_POSTPIXELSHADER_BLENDING | D3DUSAGE_DEPTHSTENCIL | D3DUSAGE_QUERY_VERTEXTEXTURE | D3DUSAGE_QUERY_SRGBWRITE;
 	if (!(Usage &= excludeUsages)) {
 		// Ensure mipmaps are generated for allowed textures.
 		(*ppTexture)->GenerateMipSubLevels();
@@ -308,9 +308,7 @@ HRESULT STDMETHODCALLTYPE Direct3DDevice9::CreateVolumeTexture(UINT Width, UINT 
 }
 HRESULT STDMETHODCALLTYPE Direct3DDevice9::CreateCubeTexture(UINT EdgeLength, UINT Levels, DWORD Usage, D3DFORMAT Format, D3DPOOL Pool, IDirect3DCubeTexture9 **ppCubeTexture, HANDLE *pSharedHandle)
 {
-	// 0 forces mip map generatation
-	int level = _implicit_swapchain->_runtime->_texture_filering_level == 0 ? Levels : 0;
-	HRESULT result = _orig->CreateCubeTexture(EdgeLength, level, Usage, Format, Pool, ppCubeTexture, pSharedHandle);
+	HRESULT result = _orig->CreateCubeTexture(EdgeLength, Levels, Usage, Format, Pool, ppCubeTexture, pSharedHandle);
 	return result;
 }
 HRESULT STDMETHODCALLTYPE Direct3DDevice9::CreateVertexBuffer(UINT Length, DWORD Usage, DWORD FVF, D3DPOOL Pool, IDirect3DVertexBuffer9 **ppVertexBuffer, HANDLE *pSharedHandle)
@@ -516,6 +514,7 @@ HRESULT STDMETHODCALLTYPE Direct3DDevice9::GetSamplerState(DWORD Sampler, D3DSAM
 HRESULT STDMETHODCALLTYPE Direct3DDevice9::SetSamplerState(DWORD Sampler, D3DSAMPLERSTATETYPE Type, DWORD Value)
 {
 	// Hacky but it works, I guess.
+	_orig->SetSamplerState(Sampler, D3DSAMP_MAXMIPLEVEL, std::clamp((int)_implicit_swapchain->_runtime->_texture_lod, 0, 6));
 	int tfl = _implicit_swapchain->_runtime->_texture_filering_level;
 	if (tfl == 0) {
 		return _orig->SetSamplerState(Sampler, Type, Value);

@@ -1258,22 +1258,39 @@ void reshade::d3d9::runtime_d3d9::draw_pso2_override_menu()
 	ImGui::TextColored(ImColor(204, 204, 0), "Some changes will require a restart of Phantasy Star Online 2.");
 
 	ImGui::Spacing();
-	ImGui::Separator();
-	ImGui::Spacing();
 
-	const char* const filtering_levels[] = {
-		"Default",
-		"Trilinear",
-		"Anisotropic x2",
-		"Anisotropic x4",
-		"Anisotropic x8",
-		"Anisotropic x16"
-	};
-	_pso2_override_needs_save |= ImGui::Combo("Texture Filtering", (int*)&_texture_filering_level, filtering_levels, IM_ARRAYSIZE(filtering_levels), IM_ARRAYSIZE(filtering_levels));
+	if (ImGui::CollapsingHeader("Texture Detail", ImGuiTreeNodeFlags_DefaultOpen))
+	{
+		const char* const texture_lod_levels[] = {
+			"High",
+			"Medium",
+			"Low",
+			"Very Low",
+			"Potato"
+		};
 
-	ImGui::Spacing();
-	ImGui::Separator();
-	ImGui::Spacing();
+		ImGui::TextColored(ImColor(225, 225, 225), "Texture Quality");
+		_pso2_override_needs_save |= ImGui::Combo(" ", (int*)&_texture_lod, texture_lod_levels, IM_ARRAYSIZE(texture_lod_levels), IM_ARRAYSIZE(texture_lod_levels));
+
+		ImGui::Spacing();
+		ImGui::Spacing();
+
+		const char* const filtering_levels[] = {
+			"Default",
+			"Trilinear",
+			"Anisotropic x2",
+			"Anisotropic x4",
+			"Anisotropic x8",
+			"Anisotropic x16"
+		};
+		ImGui::TextColored(ImColor(225, 225, 225), "Texture Filtering");
+		_pso2_override_needs_save |= ImGui::Combo("  ", (int*)&_texture_filering_level, filtering_levels, IM_ARRAYSIZE(filtering_levels), IM_ARRAYSIZE(filtering_levels));
+
+
+		ImGui::Spacing();
+		ImGui::Separator();
+		ImGui::Spacing();
+	}
 
 	if (_pso2_override_needs_save)
 		runtime::save_config();
