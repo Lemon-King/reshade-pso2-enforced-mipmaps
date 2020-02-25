@@ -311,8 +311,7 @@ HRESULT STDMETHODCALLTYPE Direct3DDevice9::CreateVolumeTexture(UINT Width, UINT 
 }
 HRESULT STDMETHODCALLTYPE Direct3DDevice9::CreateCubeTexture(UINT EdgeLength, UINT Levels, DWORD Usage, D3DFORMAT Format, D3DPOOL Pool, IDirect3DCubeTexture9 **ppCubeTexture, HANDLE *pSharedHandle)
 {
-	HRESULT result = _orig->CreateCubeTexture(EdgeLength, Levels, Usage, Format, Pool, ppCubeTexture, pSharedHandle);
-	return result;
+	return _orig->CreateCubeTexture(EdgeLength, Levels, Usage, Format, Pool, ppCubeTexture, pSharedHandle);
 }
 HRESULT STDMETHODCALLTYPE Direct3DDevice9::CreateVertexBuffer(UINT Length, DWORD Usage, DWORD FVF, D3DPOOL Pool, IDirect3DVertexBuffer9 **ppVertexBuffer, HANDLE *pSharedHandle)
 {
@@ -523,16 +522,17 @@ HRESULT STDMETHODCALLTYPE Direct3DDevice9::SetSamplerState(DWORD Sampler, D3DSAM
 		return _orig->SetSamplerState(Sampler, Type, Value);
 	}
 
-	D3DTEXTUREFILTERTYPE filterType = (D3DTEXTUREFILTERTYPE)std::clamp(tfl+1, 1, 3);
+	D3DTEXTUREFILTERTYPE filterType = (D3DTEXTUREFILTERTYPE)std::clamp(tfl, 2, 3);
+	HRESULT r = _orig->SetSamplerState(Sampler, D3DSAMP_MINFILTER, filterType);
 	_orig->SetSamplerState(Sampler, D3DSAMP_MAGFILTER, filterType);
-	_orig->SetSamplerState(Sampler, D3DSAMP_MINFILTER, filterType);
+	_orig->SetSamplerState(Sampler, D3DSAMP_MIPFILTER, filterType);
 	if (Type == D3DSAMP_ADDRESSU || Type == D3DSAMP_ADDRESSV) {
 		_orig->SetSamplerState(Sampler, Type, Value);
 	}
 	if (tfl > 1) {
 		_orig->SetSamplerState(Sampler, D3DSAMP_MAXANISOTROPY, 1<<(tfl-1));
 	}
-	return _orig->SetSamplerState(Sampler, D3DSAMP_MIPFILTER, filterType);
+	return r;
 }
 HRESULT STDMETHODCALLTYPE Direct3DDevice9::ValidateDevice(DWORD *pNumPasses)
 {

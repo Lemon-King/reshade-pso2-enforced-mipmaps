@@ -25,7 +25,7 @@ namespace reshade::d3d9
 
 		buffer_detection *_buffer_detection = nullptr;
 		UINT _texture_filering_level = 3;
-		UINT _texture_lod = 0;
+		UINT _texture_bias = 0;
 
 	private:
 		bool init_effect(size_t index) override;
