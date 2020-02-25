@@ -299,8 +299,8 @@ HRESULT STDMETHODCALLTYPE Direct3DDevice9::CreateTexture(UINT Width, UINT Height
 		// Ensure mipmaps are generated for allowed textures.
 		(*ppTexture)->GenerateMipSubLevels();
 
-		int texture_lod = std::clamp((int)_implicit_swapchain->_runtime->_texture_lod, 0, 6);
-		(*ppTexture)->SetLOD(texture_lod);
+		//int texture_bias = std::clamp((int)_implicit_swapchain->_runtime->_texture_bias, 0, 6);
+		//(*ppTexture)->SetLOD(texture_bias);
 	}
 
 	return result;
@@ -516,7 +516,7 @@ HRESULT STDMETHODCALLTYPE Direct3DDevice9::GetSamplerState(DWORD Sampler, D3DSAM
 HRESULT STDMETHODCALLTYPE Direct3DDevice9::SetSamplerState(DWORD Sampler, D3DSAMPLERSTATETYPE Type, DWORD Value)
 {
 	// Hacky but it works, I guess.
-	_orig->SetSamplerState(Sampler, D3DSAMP_MAXMIPLEVEL, std::clamp((int)_implicit_swapchain->_runtime->_texture_lod, 0, 6));
+	_orig->SetSamplerState(Sampler, D3DSAMP_MAXMIPLEVEL, std::clamp((int)_implicit_swapchain->_runtime->_texture_bias, 0, 6));
 	int tfl = _implicit_swapchain->_runtime->_texture_filering_level;
 	if (tfl == 0) {
 		return _orig->SetSamplerState(Sampler, Type, Value);
