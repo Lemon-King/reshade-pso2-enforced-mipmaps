@@ -1,7 +1,7 @@
 ReShade - Phantasy Star 2 Graphics Override
 =======
 
-This is a modification of [Reshade](https://reshade.me/) for Phantasy Star Online 2. It forces the D3D9 layer to generate [mipmaps](https://en.wikipedia.org/wiki/Mipmap) for all textures upon load where it can be filtered in different ways vastly improving visual quality.
+This is a modification of [ReShade](https://reshade.me/) for Phantasy Star Online 2. It forces the D3D9 layer to generate [mipmaps](https://en.wikipedia.org/wiki/Mipmap) for all textures upon load where it can be filtered in different ways vastly improving visual quality.
 
 A new tab has been added which allows for a selection of a few different texture filtering methods.
 
