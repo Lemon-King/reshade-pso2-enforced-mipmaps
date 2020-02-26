@@ -98,10 +98,14 @@ reshade::d3d9::runtime_d3d9::runtime_d3d9(IDirect3DDevice9 *device, IDirect3DSwa
 	subscribe_to_load_config([this](const ini_file &config) {
 		config.get("PSO2_OVERRIDES", "TextureFilteringLevel", _texture_filering_level);
 		config.get("PSO2_OVERRIDES", "TextureLOD", _texture_bias);
+		config.get("PSO2_OVERRIDES", "AutoMipMipGeneration", _texture_force_mipmap_generation);
+		config.get("PSO2_OVERRIDES", "AllowPlayerMipMapGeneration", _texture_allow_player_atlas_mipmap_generation);
 	});
 	subscribe_to_save_config([this](ini_file &config) {
 		config.set("PSO2_OVERRIDES", "TextureFilteringLevel", _texture_filering_level);
 		config.set("PSO2_OVERRIDES", "TextureLOD", _texture_bias);
+		config.set("PSO2_OVERRIDES", "AutoMipMipGeneration", _texture_force_mipmap_generation);
+		config.set("PSO2_OVERRIDES", "AllowPlayerMipMapGeneration", _texture_allow_player_atlas_mipmap_generation);
 	});
 }
 reshade::d3d9::runtime_d3d9::~runtime_d3d9()
@@ -1257,12 +1261,13 @@ void reshade::d3d9::runtime_d3d9::update_depth_texture_bindings(com_ptr<IDirect3
 
 void reshade::d3d9::runtime_d3d9::draw_pso2_override_menu()
 {
-	ImGui::TextColored(ImColor(204, 204, 0), "Some changes will require a restart of Phantasy Star Online 2.");
+	ImGui::TextColored(ImColor(204, 204, 0), "Some settings will require a restart of Phantasy Star Online 2.");
 
 	ImGui::Spacing();
 
 	if (ImGui::CollapsingHeader("Texture Detail", ImGuiTreeNodeFlags_DefaultOpen))
 	{
+
 		// I'm currently not entirely sure on the performance gains from this setting.
 		const char* const texture_bias_levels[] = {
 			"High",
@@ -1289,7 +1294,25 @@ void reshade::d3d9::runtime_d3d9::draw_pso2_override_menu()
 		ImGui::TextColored(ImColor(225, 225, 225), "Texture Filtering");
 		_pso2_override_needs_save |= ImGui::Combo("  ", (int*)&_texture_filering_level, filtering_levels, IM_ARRAYSIZE(filtering_levels), IM_ARRAYSIZE(filtering_levels));
 
+		ImGui::Spacing();
+		ImGui::Spacing();
 
+		_pso2_override_needs_save |= ImGui::Checkbox("Enable Character Mipmap Generation", &_texture_allow_player_atlas_mipmap_generation);
+
+		ImGui::Spacing();
+		ImGui::Spacing();
+
+		const char* TextAutoGenMipMaps =
+			"Auto-Generate Mipmaps allows you to force Render Level 6 to use api level generated mipmaps.\n"
+			"These generated mipmaps are a lower quality than the stock mipmaps provided by Phantasy Star Online 2 with Simple Render Level 5 and below.\n\n"
+			"It is recommended you do not use this feature and Simple Render Level 6.";
+		ImGui::TextWrapped(TextAutoGenMipMaps);
+
+		ImGui::Spacing();
+
+		_pso2_override_needs_save |= ImGui::Checkbox("Auto-Generate Mipmaps", &_texture_force_mipmap_generation);
+
+		ImGui::Spacing();
 		ImGui::Spacing();
 		ImGui::Separator();
 		ImGui::Spacing();

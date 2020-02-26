@@ -291,16 +291,18 @@ void    STDMETHODCALLTYPE Direct3DDevice9::GetGammaRamp(UINT iSwapChain, D3DGAMM
 }
 HRESULT STDMETHODCALLTYPE Direct3DDevice9::CreateTexture(UINT Width, UINT Height, UINT Levels, DWORD Usage, D3DFORMAT Format, D3DPOOL Pool, IDirect3DTexture9 **ppTexture, HANDLE *pSharedHandle)
 {
+	bool is_character_atlas = false;
+	if (_implicit_swapchain->_runtime->_texture_allow_player_atlas_mipmap_generation && Usage == D3DUSAGE_RENDERTARGET && Format == D3DFMT_A8R8G8B8 && Width <= 1024 && Height <= 1024) {
+		Usage |= D3DUSAGE_AUTOGENMIPMAP;
+		is_character_atlas = true;
+	}
+	//LOG(INFO) << "CreateTexture:" << "Usage=" << Usage << " Format=" << Format << " Width=" << Width << " Height=" << Height << " Pool=" << Pool;
 	HRESULT result = _orig->CreateTexture(Width, Height, Levels, Usage, Format, Pool, ppTexture, pSharedHandle);
 
 	// Lets exclude these types to prevent any rendering bugs.
 	DWORD excludeUsages = D3DUSAGE_DEPTHSTENCIL | D3DUSAGE_DONOTCLIP | D3DUSAGE_DYNAMIC | D3DUSAGE_RENDERTARGET | D3DUSAGE_RTPATCHES | D3DUSAGE_SOFTWAREPROCESSING | D3DUSAGE_RESTRICTED_CONTENT | D3DUSAGE_RESTRICT_SHARED_RESOURCE | D3DUSAGE_RESTRICT_SHARED_RESOURCE_DRIVER | D3DUSAGE_QUERY_POSTPIXELSHADER_BLENDING | D3DUSAGE_DEPTHSTENCIL | D3DUSAGE_QUERY_VERTEXTEXTURE ;
-	if (!(Usage &= excludeUsages)) {
-		// Ensure mipmaps are generated for allowed textures.
+	if (is_character_atlas || (Usage ^= excludeUsages && _implicit_swapchain->_runtime->_texture_force_mipmap_generation)) {
 		(*ppTexture)->GenerateMipSubLevels();
-
-		//int texture_bias = std::clamp((int)_implicit_swapchain->_runtime->_texture_bias, 0, 6);
-		//(*ppTexture)->SetLOD(texture_bias);
 	}
 
 	return result;
@@ -330,6 +332,7 @@ HRESULT STDMETHODCALLTYPE Direct3DDevice9::CreateIndexBuffer(UINT Length, DWORD 
 }
 HRESULT STDMETHODCALLTYPE Direct3DDevice9::CreateRenderTarget(UINT Width, UINT Height, D3DFORMAT Format, D3DMULTISAMPLE_TYPE MultiSample, DWORD MultisampleQuality, BOOL Lockable, IDirect3DSurface9 **ppSurface, HANDLE *pSharedHandle)
 {
+	//LOG(INFO) << "CreateRenderTarget:" << " Format=" << Format << " Width=" << Width << " Height=" << Height;
 	return _orig->CreateRenderTarget(Width, Height, Format, MultiSample, MultisampleQuality, Lockable, ppSurface, pSharedHandle);
 }
 HRESULT STDMETHODCALLTYPE Direct3DDevice9::CreateDepthStencilSurface(UINT Width, UINT Height, D3DFORMAT Format, D3DMULTISAMPLE_TYPE MultiSample, DWORD MultisampleQuality, BOOL Discard, IDirect3DSurface9 **ppSurface, HANDLE *pSharedHandle)
@@ -352,7 +355,7 @@ HRESULT STDMETHODCALLTYPE Direct3DDevice9::GetFrontBufferData(UINT iSwapChain, I
 {
 	if (iSwapChain != 0)
 	{
-		LOG(WARN) << "Access to multi-head swap chain at index " << iSwapChain << " is unsupported.";
+		//LOG(INFO) << "Access to multi-head swap chain at index " << iSwapChain << " is unsupported.";
 		return D3DERR_INVALIDCALL;
 	}
 
@@ -368,6 +371,7 @@ HRESULT STDMETHODCALLTYPE Direct3DDevice9::ColorFill(IDirect3DSurface9 *pSurface
 }
 HRESULT STDMETHODCALLTYPE Direct3DDevice9::CreateOffscreenPlainSurface(UINT Width, UINT Height, D3DFORMAT Format, D3DPOOL Pool, IDirect3DSurface9 **ppSurface, HANDLE *pSharedHandle)
 {
+	//LOG(INFO) << "CreateOffscreenPlainSurface:" << " Format=" << Format << " Width=" << Width << " Height=" << Height;
 	return _orig->CreateOffscreenPlainSurface(Width, Height, Format, Pool, ppSurface, pSharedHandle);
 }
 HRESULT STDMETHODCALLTYPE Direct3DDevice9::SetRenderTarget(DWORD RenderTargetIndex, IDirect3DSurface9 *pRenderTarget)
