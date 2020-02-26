@@ -291,17 +291,24 @@ void    STDMETHODCALLTYPE Direct3DDevice9::GetGammaRamp(UINT iSwapChain, D3DGAMM
 }
 HRESULT STDMETHODCALLTYPE Direct3DDevice9::CreateTexture(UINT Width, UINT Height, UINT Levels, DWORD Usage, D3DFORMAT Format, D3DPOOL Pool, IDirect3DTexture9 **ppTexture, HANDLE *pSharedHandle)
 {
+	// Humanoid Characters use 2048 x 1024 atlas for their body.
+	// Cast Characters have 1024 x 1024 x 3 for their modular body.
+	// Attachments and accessories use 512 x 512 and 128 x 64.
+
+	//LOG(INFO) << "CreateTexture:" << " Usage=" << Usage << " Format=" << Format << " Width=" << Width << " Height=" << Height << " Levels=" << Levels << " Pool=" << Pool;
+
 	bool is_character_atlas = false;
-	if (_implicit_swapchain->_runtime->_texture_allow_player_atlas_mipmap_generation && Usage == D3DUSAGE_RENDERTARGET && Format == D3DFMT_A8R8G8B8 && Width <= 1024 && Height <= 1024) {
-		Usage |= D3DUSAGE_AUTOGENMIPMAP;
+	if (_implicit_swapchain->_runtime->_texture_allow_player_atlas_mipmap_generation && Usage == 0 && Format == 21 && ((Width == 2048 && Height == 1024) || (Width == 1024 && Height == 1024) || (Width == 512 && Height == 512) || (Width == 128 && Height == 64)) && Pool == 0 && Levels == 1) {
+		// Ingame characters do not use D3DUSAGE_RENDERTARGET, so we'll force that to allow AutoGenMipMap to function.
+		Usage = D3DUSAGE_RENDERTARGET | D3DUSAGE_AUTOGENMIPMAP;
 		is_character_atlas = true;
 	}
-	//LOG(INFO) << "CreateTexture:" << "Usage=" << Usage << " Format=" << Format << " Width=" << Width << " Height=" << Height << " Pool=" << Pool;
 	HRESULT result = _orig->CreateTexture(Width, Height, Levels, Usage, Format, Pool, ppTexture, pSharedHandle);
 
 	// Lets exclude these types to prevent any rendering bugs.
 	DWORD excludeUsages = D3DUSAGE_DEPTHSTENCIL | D3DUSAGE_DONOTCLIP | D3DUSAGE_DYNAMIC | D3DUSAGE_RENDERTARGET | D3DUSAGE_RTPATCHES | D3DUSAGE_SOFTWAREPROCESSING | D3DUSAGE_RESTRICTED_CONTENT | D3DUSAGE_RESTRICT_SHARED_RESOURCE | D3DUSAGE_RESTRICT_SHARED_RESOURCE_DRIVER | D3DUSAGE_QUERY_POSTPIXELSHADER_BLENDING | D3DUSAGE_DEPTHSTENCIL | D3DUSAGE_QUERY_VERTEXTEXTURE ;
 	if (is_character_atlas || (Usage ^= excludeUsages && _implicit_swapchain->_runtime->_texture_force_mipmap_generation)) {
+		(*ppTexture)->SetAutoGenFilterType(D3DTEXF_ANISOTROPIC);
 		(*ppTexture)->GenerateMipSubLevels();
 	}
 
@@ -371,7 +378,7 @@ HRESULT STDMETHODCALLTYPE Direct3DDevice9::ColorFill(IDirect3DSurface9 *pSurface
 }
 HRESULT STDMETHODCALLTYPE Direct3DDevice9::CreateOffscreenPlainSurface(UINT Width, UINT Height, D3DFORMAT Format, D3DPOOL Pool, IDirect3DSurface9 **ppSurface, HANDLE *pSharedHandle)
 {
-	//LOG(INFO) << "CreateOffscreenPlainSurface:" << " Format=" << Format << " Width=" << Width << " Height=" << Height;
+	//LOG(INFO) << "CreateOffscreenPlainSurface:" << " Format=" << Format << " Width=" << Width << " Height=" << Height << " Pool=" << Pool;
 	return _orig->CreateOffscreenPlainSurface(Width, Height, Format, Pool, ppSurface, pSharedHandle);
 }
 HRESULT STDMETHODCALLTYPE Direct3DDevice9::SetRenderTarget(DWORD RenderTargetIndex, IDirect3DSurface9 *pRenderTarget)
