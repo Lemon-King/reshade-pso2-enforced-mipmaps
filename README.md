@@ -1,9 +1,9 @@
 ReShade - Phantasy Star 2 Graphics Override
 =======
 
-This is a modification of [ReShade](https://reshade.me/) for Phantasy Star Online 2. It forces the D3D9 layer to generate [mipmaps](https://en.wikipedia.org/wiki/Mipmap) for all textures upon load where it can be filtered in different ways vastly improving visual quality.
+This is a modification of [ReShade](https://reshade.me/) for Phantasy Star Online 2. It adds support for the creation of mipmaps for players, improving texture filtering quality over stock, and if you're using Simple Render Level 6 (not recommended) it forces the D3D9 layer to generate [mipmaps](https://en.wikipedia.org/wiki/Mipmap) for all environment textures.
 
-A new tab has been added which allows for a selection of a few different texture filtering methods.
+A new tab has been added for configuration.
 
 ![Settings](https://i.imgur.com/9hjYAuD.png)
 
@@ -12,6 +12,7 @@ A new tab has been added which allows for a selection of a few different texture
 ## Installation
 1. Install Reshade into the PSO2 bin folder
 2. Copy D3D9.dll over the existing D3D9.dll from Reshade
+3. Make sure PSO2 is set to Simple Render Level 5 in Settings.
 
 
 ReShade
