@@ -5,7 +5,7 @@ This is a modification of [ReShade](https://reshade.me/) for Phantasy Star Onlin
 
 A new tab has been added which allows for a selection of a few different texture filtering methods.
 
-![Texture Detail](https://i.imgur.com/pUVCzVf.png)
+![Settings](https://i.imgur.com/9hjYAuD.png)
 
 ![Texture Filtering Comparison](https://i.imgur.com/Rl2fFVa.jpg)
 
