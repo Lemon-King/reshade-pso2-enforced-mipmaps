@@ -195,7 +195,7 @@ HRESULT STDMETHODCALLTYPE Direct3DDevice9::GetSwapChain(UINT iSwapChain, IDirect
 	_implicit_swapchain->AddRef();
 	*ppSwapChain = _implicit_swapchain;
 
-	return D3D_OK;
+return D3D_OK;
 }
 UINT    STDMETHODCALLTYPE Direct3DDevice9::GetNumberOfSwapChains()
 {
@@ -295,19 +295,36 @@ HRESULT STDMETHODCALLTYPE Direct3DDevice9::CreateTexture(UINT Width, UINT Height
 	// Cast Characters have 1024 x 1024 x 3 for their modular body.
 	// Attachments and accessories use 512 x 512 and 128 x 64.
 
-	//LOG(INFO) << "CreateTexture:" << " Usage=" << Usage << " Format=" << Format << " Width=" << Width << " Height=" << Height << " Levels=" << Levels << " Pool=" << Pool;
+	//if (Pool != 2) {
+	//	LOG(INFO) << "CreateTexture:" << " Usage=" << Usage << " Format=" << Format << " Width=" << Width << " Height=" << Height << " Levels=" << Levels << " Pool=" << Pool;
+	//}
 
-	bool is_character_atlas = false;
-	if (_implicit_swapchain->_runtime->_texture_allow_player_atlas_mipmap_generation && Usage == 0 && Format == 21 && ((Width == 2048 && Height == 1024) || (Width == 1024 && Height == 1024) || (Width == 512 && Height == 512) || (Width == 128 && Height == 64)) && Pool == 0 && Levels == 1) {
-		// Ingame characters do not use D3DUSAGE_RENDERTARGET, so we'll force that to allow AutoGenMipMap to function.
+	bool allow_mipmap_generation = false;
+	bool is_atlas_resolution =
+		(Width == 2048 && Height == 1024) ||
+		(Width == 1024 && Height == 1024) ||
+		(Width == 512 && Height == 1024) ||
+		(Width == 512 && Height == 512) ||
+		(Width == 256 && Height == 256 && Levels == 1) ||
+		(Width == 128 && Height == 64) ||
+		(Width == 64 && Height == 64);
+	if (_implicit_swapchain->_runtime->_texture_allow_player_atlas_mipmap_generation && Usage == 0 && Format == D3DFMT_A8R8G8B8 && Pool == 0 && is_atlas_resolution) {
+		// Ingame characters do not use D3DUSAGE_RENDERTARGET, so we'll force and add D3DUSAGE_AUTOGENMIPMAP.
 		Usage = D3DUSAGE_RENDERTARGET | D3DUSAGE_AUTOGENMIPMAP;
-		is_character_atlas = true;
+		allow_mipmap_generation = true;
 	}
+
+	// Allow textures with only 1 mip level to have mipmaps generated.
+	if ((Format == D3DFMT_DXT1 || Format == D3DFMT_DXT5) && Levels == 1 && Pool == 0) {
+		Usage = Usage | D3DUSAGE_AUTOGENMIPMAP;
+		allow_mipmap_generation = true;
+	}
+
 	HRESULT result = _orig->CreateTexture(Width, Height, Levels, Usage, Format, Pool, ppTexture, pSharedHandle);
 
 	// Lets exclude these types to prevent any rendering bugs.
-	DWORD excludeUsages = D3DUSAGE_DEPTHSTENCIL | D3DUSAGE_DONOTCLIP | D3DUSAGE_DYNAMIC | D3DUSAGE_RENDERTARGET | D3DUSAGE_RTPATCHES | D3DUSAGE_SOFTWAREPROCESSING | D3DUSAGE_RESTRICTED_CONTENT | D3DUSAGE_RESTRICT_SHARED_RESOURCE | D3DUSAGE_RESTRICT_SHARED_RESOURCE_DRIVER | D3DUSAGE_QUERY_POSTPIXELSHADER_BLENDING | D3DUSAGE_DEPTHSTENCIL | D3DUSAGE_QUERY_VERTEXTEXTURE ;
-	if (is_character_atlas || (Usage ^= excludeUsages && _implicit_swapchain->_runtime->_texture_force_mipmap_generation)) {
+	DWORD excludeUsages = D3DUSAGE_DYNAMIC | D3DUSAGE_RENDERTARGET;
+	if ((allow_mipmap_generation || (Usage ^= excludeUsages && _implicit_swapchain->_runtime->_texture_force_mipmap_generation)) && Levels == 1 && Pool == 0) {
 		(*ppTexture)->SetAutoGenFilterType(D3DTEXF_ANISOTROPIC);
 		(*ppTexture)->GenerateMipSubLevels();
 	}
