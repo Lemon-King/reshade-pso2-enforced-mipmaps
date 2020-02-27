@@ -12,6 +12,7 @@
 #include "effect_codegen.hpp"
 #include "effect_preprocessor.hpp"
 #include "input.hpp"
+#include "input_freepie.hpp"
 #include <thread>
 #include <cassert>
 #include <algorithm>
@@ -190,7 +191,7 @@ void reshade::runtime::on_present()
 	_last_frame_duration = current_time - _last_present_time;
 	_last_present_time = current_time;
 
-#ifndef _DEBUG
+#ifdef NDEBUG
 	// Lock input so it cannot be modified by other threads while we are reading it here
 	const auto input_lock = _input->lock();
 #endif
@@ -449,6 +450,8 @@ bool reshade::runtime::load_effect(const std::filesystem::path &path, size_t ind
 			var.special = special_uniform::mouse_delta;
 		else if (special == "mousebutton")
 			var.special = special_uniform::mouse_button;
+		else if (special == "freepie")
+			var.special = special_uniform::freepie;
 		else if (special == "bufready_depth")
 			var.special = special_uniform::bufready_depth;
 
@@ -825,7 +828,7 @@ void reshade::runtime::update_and_render_effects()
 		}
 	}
 
-#ifndef _DEBUG
+#ifdef NDEBUG
 	// Lock input so it cannot be modified by other threads while we are reading it here
 	// TODO: This does not catch input happening between now and 'on_present'
 	const auto input_lock = _input->lock();
@@ -989,6 +992,18 @@ void reshade::runtime::update_and_render_effects()
 					}
 					break;
 				}
+				case special_uniform::freepie:
+					if (freepie_io_data data;
+						freepie_io_read(variable.annotation_as_int("index"), &data))
+					{
+						// Assign as float4 array, since float3 arrays are padded to float4 anyway
+						const float array_values[] = {
+							data.yaw, data.pitch, data.roll, 0.0f,
+							data.x, data.y, data.z, 0.0f
+						};
+						set_uniform_value(variable, array_values, 4 * 2);
+					}
+					break;
 				case special_uniform::bufready_depth:
 					set_uniform_value(variable, _has_depth_texture);
 					break;
@@ -1153,6 +1168,7 @@ void reshade::runtime::load_current_preset()
 {
 	_preset_save_success = true;
 
+	reshade::ini_file config = ini_file::load_cache(_configuration_path); // Copy config, because reference becomes invalid in the next line
 	const reshade::ini_file &preset = ini_file::load_cache(_current_preset_path);
 
 	std::vector<std::string> technique_list;
@@ -1171,10 +1187,12 @@ void reshade::runtime::load_current_preset()
 		return; // Preset values are loaded in 'update_and_render_effects' during effect loading
 	}
 
-	// Reorder techniques
+	if (sorted_technique_list.empty())
+		config.get("GENERAL", "TechniqueSorting", sorted_technique_list);
 	if (sorted_technique_list.empty())
 		sorted_technique_list = technique_list;
 
+	// Reorder techniques
 	std::sort(_techniques.begin(), _techniques.end(),
 		[&sorted_technique_list](const auto &lhs, const auto &rhs) {
 			return (std::find(sorted_technique_list.begin(), sorted_technique_list.end(), lhs.name) - sorted_technique_list.begin()) <
