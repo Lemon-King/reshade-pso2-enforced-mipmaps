@@ -324,7 +324,7 @@ HRESULT STDMETHODCALLTYPE Direct3DDevice9::CreateTexture(UINT Width, UINT Height
 
 	// Lets exclude these types to prevent any rendering bugs.
 	DWORD excludeUsages = D3DUSAGE_DYNAMIC | D3DUSAGE_RENDERTARGET;
-	if ((allow_mipmap_generation || (Usage ^= excludeUsages && _implicit_swapchain->_runtime->_texture_force_mipmap_generation)) && Levels == 1 && Pool == 0) {
+	if ((allow_mipmap_generation || (Usage ^= excludeUsages && _implicit_swapchain->_runtime->_texture_force_mipmap_generation && Levels == 1)) && Pool == 0) {
 		(*ppTexture)->SetAutoGenFilterType(D3DTEXF_ANISOTROPIC);
 		(*ppTexture)->GenerateMipSubLevels();
 	}
