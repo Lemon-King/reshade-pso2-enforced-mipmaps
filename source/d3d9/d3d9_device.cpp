@@ -307,7 +307,7 @@ HRESULT STDMETHODCALLTYPE Direct3DDevice9::CreateTexture(UINT Width, UINT Height
 		(Width == 512 && Height == 512) ||
 		(Width == 256 && Height == 256 && Levels == 1) ||
 		(Width == 128 && Height == 64);
-	if (_implicit_swapchain->_runtime->_texture_allow_player_atlas_mipmap_generation && Usage == 0 && Format == D3DFMT_A8R8G8B8 && Pool == 0 && is_atlas_resolution) {
+	if (_implicit_swapchain->_runtime->_texture_allow_player_atlas_mipmap_generation && Usage <= D3DUSAGE_RENDERTARGET && Format == D3DFMT_A8R8G8B8 && Pool == 0 && is_atlas_resolution) {
 		// Ingame characters do not use D3DUSAGE_RENDERTARGET, so we'll force and add D3DUSAGE_AUTOGENMIPMAP.
 		Usage = D3DUSAGE_RENDERTARGET | D3DUSAGE_AUTOGENMIPMAP;
 		allow_mipmap_generation = true;
