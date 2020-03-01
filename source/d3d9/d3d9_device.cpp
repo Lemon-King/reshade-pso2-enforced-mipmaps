@@ -291,18 +291,14 @@ void    STDMETHODCALLTYPE Direct3DDevice9::GetGammaRamp(UINT iSwapChain, D3DGAMM
 }
 HRESULT STDMETHODCALLTYPE Direct3DDevice9::CreateTexture(UINT Width, UINT Height, UINT Levels, DWORD Usage, D3DFORMAT Format, D3DPOOL Pool, IDirect3DTexture9 **ppTexture, HANDLE *pSharedHandle)
 {
-	// Humanoid Characters use 2048 x 1024 atlas for their body.
-	// Cast Characters have 1024 x 1024 x 3 for their modular body.
-	// Attachments and accessories use 512 x 512 and 128 x 64.
-
 	//if (Pool != 2) {
-	//	LOG(INFO) << "CreateTexture:" << " Usage=" << Usage << " Format=" << Format << " Width=" << Width << " Height=" << Height << " Levels=" << Levels << " Pool=" << Pool;
+	//	LOG(INFO) << "CreateTexture:" << " Usage=" << Usage << " Format=" << Format << " Width=" << Width << " Height=" << Height << " Levels=" << Levels  << " Pool=" << Pool;
 	//}
 
 	bool allow_mipmap_generation = false;
 	bool is_atlas_resolution =
-		(Width == 2048 && Height == 1024) ||
-		(Width == 1024 && Height == 1024) ||
+		(Width == 2048 && Height == 1024) ||	// Full Body
+		(Width == 1024 && Height == 1024) ||	// Cast Parts
 		(Width == 512 && Height == 1024) ||
 		(Width == 512 && Height == 512) ||
 		(Width == 256 && Height == 256 && Levels == 1) ||
@@ -312,7 +308,6 @@ HRESULT STDMETHODCALLTYPE Direct3DDevice9::CreateTexture(UINT Width, UINT Height
 		Usage = D3DUSAGE_RENDERTARGET | D3DUSAGE_AUTOGENMIPMAP;
 		allow_mipmap_generation = true;
 	}
-
 	// Allow textures with only 1 mip level to have mipmaps generated.
 	if ((Format == D3DFMT_DXT1 || Format == D3DFMT_DXT5) && Levels == 1 && Pool == 0) {
 		Usage = Usage | D3DUSAGE_AUTOGENMIPMAP;
@@ -323,7 +318,7 @@ HRESULT STDMETHODCALLTYPE Direct3DDevice9::CreateTexture(UINT Width, UINT Height
 
 	// Lets exclude these types to prevent any rendering bugs.
 	DWORD excludeUsages = D3DUSAGE_DYNAMIC | D3DUSAGE_RENDERTARGET | D3DUSAGE_QUERY_POSTPIXELSHADER_BLENDING | D3DUSAGE_DEPTHSTENCIL | D3DUSAGE_QUERY_VERTEXTEXTURE;
-	if (allow_mipmap_generation || (Usage ^= excludeUsages && _implicit_swapchain->_runtime->_texture_force_mipmap_generation && Levels == 1 && Pool == 0)) {
+	if (allow_mipmap_generation || (Usage &= excludeUsages && _implicit_swapchain->_runtime->_texture_force_mipmap_generation && Levels == 1 && Pool == 0)) {
 		(*ppTexture)->SetAutoGenFilterType(D3DTEXF_ANISOTROPIC);
 		(*ppTexture)->GenerateMipSubLevels();
 	}
@@ -828,16 +823,19 @@ HRESULT STDMETHODCALLTYPE Direct3DDevice9::CheckDeviceState(HWND hDestinationWin
 HRESULT STDMETHODCALLTYPE Direct3DDevice9::CreateRenderTargetEx(UINT Width, UINT Height, D3DFORMAT Format, D3DMULTISAMPLE_TYPE MultiSample, DWORD MultisampleQuality, BOOL Lockable, IDirect3DSurface9 **ppSurface, HANDLE *pSharedHandle, DWORD Usage)
 {
 	assert(_extended_interface);
+	//LOG(INFO) << "CreateRenderTargetEx:" << " Usage=" << Usage << " Format=" << Format << " Width=" << Width << " Height=" << Height;
 	return static_cast<IDirect3DDevice9Ex *>(_orig)->CreateRenderTargetEx(Width, Height, Format, MultiSample, MultisampleQuality, Lockable, ppSurface, pSharedHandle, Usage);
 }
 HRESULT STDMETHODCALLTYPE Direct3DDevice9::CreateOffscreenPlainSurfaceEx(UINT Width, UINT Height, D3DFORMAT Format, D3DPOOL Pool, IDirect3DSurface9 **ppSurface, HANDLE *pSharedHandle, DWORD Usage)
 {
 	assert(_extended_interface);
+	//LOG(INFO) << "CreateOffscreenPlainSurfaceEx:" << " Usage=" << Usage << " Format=" << Format << " Width=" << Width << " Height=" << Height << " Pool=" << Pool;
 	return static_cast<IDirect3DDevice9Ex *>(_orig)->CreateOffscreenPlainSurfaceEx(Width, Height, Format, Pool, ppSurface, pSharedHandle, Usage);
 }
 HRESULT STDMETHODCALLTYPE Direct3DDevice9::CreateDepthStencilSurfaceEx(UINT Width, UINT Height, D3DFORMAT Format, D3DMULTISAMPLE_TYPE MultiSample, DWORD MultisampleQuality, BOOL Discard, IDirect3DSurface9 **ppSurface, HANDLE *pSharedHandle, DWORD Usage)
 {
 	assert(_extended_interface);
+	//LOG(INFO) << "CreateOffscreenPlainSurfaceEx:" << " Usage=" << Usage << " Format=" << Format << " Width=" << Width << " Height=" << Height;
 	return static_cast<IDirect3DDevice9Ex *>(_orig)->CreateDepthStencilSurfaceEx(Width, Height, Format, MultiSample, MultisampleQuality, Discard, ppSurface, pSharedHandle, Usage);
 }
 HRESULT STDMETHODCALLTYPE Direct3DDevice9::ResetEx(D3DPRESENT_PARAMETERS *pPresentationParameters, D3DDISPLAYMODEEX *pFullscreenDisplayMode)
