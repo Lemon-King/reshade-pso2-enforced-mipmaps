@@ -295,34 +295,26 @@ HRESULT STDMETHODCALLTYPE Direct3DDevice9::CreateTexture(UINT Width, UINT Height
 	//	LOG(INFO) << "CreateTexture:" << " Usage=" << Usage << " Format=" << Format << " Width=" << Width << " Height=" << Height << " Levels=" << Levels  << " Pool=" << Pool;
 	//}
 
-	bool allow_mipmap_generation = false;
-	bool is_atlas_resolution =
+	bool allow_mipmap_gen = false;
+	const D3DTEXTUREFILTERTYPE mipmap_filter_quality = _implicit_swapchain->_runtime->_texture_mipmap_generation_quality ? D3DTEXF_ANISOTROPIC : D3DTEXF_LINEAR;
+	const bool is_atlas_resolution =
 		(Width == 2048 && Height == 1024) ||	// Full Body
 		(Width == 1024 && Height == 1024) ||	// Cast Parts
 		(Width == 512 && Height == 1024) ||
 		(Width == 512 && Height == 512) ||
 		(Width == 256 && Height == 256 && Levels == 1) ||
 		(Width == 128 && Height == 64);
-	if (_implicit_swapchain->_runtime->_texture_allow_player_atlas_mipmap_generation && Usage <= D3DUSAGE_RENDERTARGET && Format == D3DFMT_A8R8G8B8 && Pool == 0 && is_atlas_resolution) {
-		// Ingame characters do not use D3DUSAGE_RENDERTARGET, so we'll force and add D3DUSAGE_AUTOGENMIPMAP.
-		Usage = D3DUSAGE_RENDERTARGET | D3DUSAGE_AUTOGENMIPMAP;
-		allow_mipmap_generation = true;
-	}
-	// Allow textures with only 1 mip level to have mipmaps generated.
-	if ((Format == D3DFMT_DXT1 || Format == D3DFMT_DXT5) && Levels == 1 && Pool == 0) {
-		Usage = Usage | D3DUSAGE_AUTOGENMIPMAP;
-		allow_mipmap_generation = true;
+	if (_implicit_swapchain->_runtime->_texture_allow_player_atlas_mipmap_generation && Usage <= D3DUSAGE_RENDERTARGET && Format == D3DFMT_A8R8G8B8 && is_atlas_resolution && Pool == 0) {
+		Usage |= D3DUSAGE_AUTOGENMIPMAP;
+	} else if ((Format == D3DFMT_DXT1 || Format == D3DFMT_DXT5) && Levels == 1 && Pool == 0) {
+		allow_mipmap_gen = true;
 	}
 
 	HRESULT result = _orig->CreateTexture(Width, Height, Levels, Usage, Format, Pool, ppTexture, pSharedHandle);
-
-	// Lets exclude these types to prevent any rendering bugs.
-	DWORD excludeUsages = D3DUSAGE_DYNAMIC | D3DUSAGE_RENDERTARGET | D3DUSAGE_QUERY_POSTPIXELSHADER_BLENDING | D3DUSAGE_DEPTHSTENCIL | D3DUSAGE_QUERY_VERTEXTEXTURE;
-	if (allow_mipmap_generation || (Usage &= excludeUsages && _implicit_swapchain->_runtime->_texture_force_mipmap_generation && Levels == 1 && Pool == 0)) {
-		(*ppTexture)->SetAutoGenFilterType(D3DTEXF_ANISOTROPIC);
+	if (allow_mipmap_gen) {
+		(*ppTexture)->SetAutoGenFilterType(mipmap_filter_quality);
 		(*ppTexture)->GenerateMipSubLevels();
 	}
-
 	return result;
 }
 HRESULT STDMETHODCALLTYPE Direct3DDevice9::CreateVolumeTexture(UINT Width, UINT Height, UINT Depth, UINT Levels, DWORD Usage, D3DFORMAT Format, D3DPOOL Pool, IDirect3DVolumeTexture9 **ppVolumeTexture, HANDLE *pSharedHandle)
