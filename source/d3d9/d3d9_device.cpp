@@ -540,7 +540,7 @@ HRESULT STDMETHODCALLTYPE Direct3DDevice9::SetSamplerState(DWORD Sampler, D3DSAM
 	HRESULT r = _orig->SetSamplerState(Sampler, D3DSAMP_MINFILTER, filterType);
 	_orig->SetSamplerState(Sampler, D3DSAMP_MAGFILTER, filterType);
 	_orig->SetSamplerState(Sampler, D3DSAMP_MIPFILTER, filterType);
-	if (Type == D3DSAMP_ADDRESSU || Type == D3DSAMP_ADDRESSV) {
+	if (Type == D3DSAMP_ADDRESSU || Type == D3DSAMP_ADDRESSV || Type == D3DSAMP_ADDRESSW) {
 		_orig->SetSamplerState(Sampler, Type, Value);
 	}
 	if (tfl > 1) {
