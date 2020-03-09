@@ -10,9 +10,9 @@ A new tab has been added for configuration.
 ![Texture Filtering Comparison](https://i.imgur.com/Rl2fFVa.jpg)
 
 ## Installation
-1. Install Reshade into the PSO2 bin folder
-2. Copy D3D9.dll over the existing D3D9.dll from Reshade
-3. Make sure PSO2 is set to Simple Render Level 5 in Settings.
+1. Install Reshade into pso2_bin.
+2. Copy the PSO2 modified d3d9.dll over the existing d3d9.dll from Reshade.
+3. Make sure PSO2 is set to Render Level 5 in Settings.
 
 
 ReShade
