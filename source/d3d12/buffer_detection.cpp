@@ -1,11 +1,11 @@
-/**
+/*
  * Copyright (C) 2014 Patrick Mours. All rights reserved.
  * License: https://github.com/crosire/reshade#license
  */
 
 #include "dll_log.hpp"
 #include "buffer_detection.hpp"
-#include "../dxgi/format_utils.hpp"
+#include "dxgi/format_utils.hpp"
 #include <mutex>
 #include <cmath>
 
@@ -33,6 +33,8 @@ void reshade::d3d12::buffer_detection_context::reset(bool release_resources)
 	buffer_detection::reset();
 
 #if RESHADE_DEPTH
+	assert(_depthstencil_clear_texture == nullptr || _context == this);
+
 	if (release_resources)
 	{
 		assert(_context == this);

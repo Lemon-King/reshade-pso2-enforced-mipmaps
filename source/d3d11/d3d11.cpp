@@ -1,4 +1,4 @@
-/**
+/*
  * Copyright (C) 2014 Patrick Mours. All rights reserved.
  * License: https://github.com/crosire/reshade#license
  */
@@ -7,6 +7,8 @@
 #include "hook_manager.hpp"
 #include "d3d11_device.hpp"
 #include "d3d11_device_context.hpp"
+
+extern thread_local bool g_in_dxgi_runtime;
 
 HOOK_EXPORT HRESULT WINAPI D3D11CreateDevice(IDXGIAdapter *pAdapter, D3D_DRIVER_TYPE DriverType, HMODULE Software, UINT Flags, const D3D_FEATURE_LEVEL *pFeatureLevels, UINT FeatureLevels, UINT SDKVersion, ID3D11Device **ppDevice, D3D_FEATURE_LEVEL *pFeatureLevel, ID3D11DeviceContext **ppImmediateContext)
 {
@@ -44,6 +46,11 @@ HOOK_EXPORT HRESULT WINAPI D3D11CreateDeviceAndSwapChain(IDXGIAdapter *pAdapter,
 		<< ", ppImmediateContext = " << ppImmediateContext
 		<< ')' << " ...";
 
+#ifndef NDEBUG
+	// Remove flag that prevents turning on the debug layer
+	Flags &= ~D3D11_CREATE_DEVICE_PREVENT_ALTERING_LAYER_SETTINGS_FROM_REGISTRY;
+#endif
+
 	// Use local feature level variable in case the application did not pass one in
 	D3D_FEATURE_LEVEL FeatureLevel = D3D_FEATURE_LEVEL_11_0;
 
@@ -60,7 +67,8 @@ HOOK_EXPORT HRESULT WINAPI D3D11CreateDeviceAndSwapChain(IDXGIAdapter *pAdapter,
 	LOG(INFO) << "> Using feature level " << std::hex << FeatureLevel << std::dec << '.';
 
 	// It is valid for the device out parameter to be NULL if the application wants to check feature level support, so just return early in that case
-	if (ppDevice == nullptr)
+	// Also return early here in case this called from within 'IDXGISwapChain::Present' or 'IDXGIFactory::CreateSwapChain', which indicates that the DXGI runtime is trying to create an internal device, which should not be hooked
+	if (ppDevice == nullptr || g_in_dxgi_runtime)
 	{
 		assert(ppSwapChain == nullptr && ppImmediateContext == nullptr);
 		return hr;

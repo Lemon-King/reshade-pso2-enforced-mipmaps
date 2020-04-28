@@ -1,4 +1,4 @@
-﻿/**
+﻿/*
  * Copyright (C) 2014 Patrick Mours. All rights reserved.
  * License: https://github.com/crosire/reshade#license
  */
@@ -22,7 +22,7 @@ using System.Windows.Media.Imaging;
 using System.Windows.Threading;
 using System.Xml;
 
-namespace ReShade.Setup
+namespace ReShade.Setup.Dialogs
 {
 	public partial class SelectAppDialog : Window
 	{

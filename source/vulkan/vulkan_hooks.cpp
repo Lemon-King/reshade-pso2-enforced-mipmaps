@@ -1,4 +1,4 @@
-/**
+/*
  * Copyright (C) 2014 Patrick Mours. All rights reserved.
  * License: https://github.com/crosire/reshade#license
  */
@@ -10,7 +10,6 @@
 #include "vk_layer_dispatch_table.h"
 #include "format_utils.hpp"
 #include "lockfree_table.hpp"
-#include <memory>
 
 struct device_data
 {
@@ -332,6 +331,9 @@ VkResult VKAPI_CALL vkCreateDevice(VkPhysicalDevice physicalDevice, const VkDevi
 		add_extension(VK_KHR_PUSH_DESCRIPTOR_EXTENSION_NAME, false); // This is optional, see imgui code in 'runtime_vk'
 		add_extension(VK_KHR_IMAGE_FORMAT_LIST_EXTENSION_NAME, true);
 		add_extension(VK_KHR_SWAPCHAIN_MUTABLE_FORMAT_EXTENSION_NAME, true);
+#ifndef NDEBUG
+		add_extension(VK_EXT_DEBUG_MARKER_EXTENSION_NAME, false);
+#endif
 	}
 	else
 	{
@@ -449,6 +451,7 @@ VkResult VKAPI_CALL vkCreateDevice(VkPhysicalDevice physicalDevice, const VkDevi
 	INIT_DEVICE_PROC(CmdWriteTimestamp);
 	INIT_DEVICE_PROC(CmdPushConstants);
 	INIT_DEVICE_PROC(CmdBeginRenderPass);
+	INIT_DEVICE_PROC(CmdNextSubpass);
 	INIT_DEVICE_PROC(CmdEndRenderPass);
 	INIT_DEVICE_PROC(CmdExecuteCommands);
 	// ---- Core 1_1 commands
@@ -466,6 +469,8 @@ VkResult VKAPI_CALL vkCreateDevice(VkPhysicalDevice physicalDevice, const VkDevi
 	INIT_DEVICE_PROC(CmdPushDescriptorSetKHR);
 	// ---- VK_EXT_debug_marker extension commands
 	INIT_DEVICE_PROC(DebugMarkerSetObjectNameEXT);
+	INIT_DEVICE_PROC(CmdDebugMarkerBeginEXT);
+	INIT_DEVICE_PROC(CmdDebugMarkerEndEXT);
 #undef INIT_DEVICE_PROC
 
 #if RESHADE_VERBOSE_LOG
@@ -673,7 +678,7 @@ VkResult VKAPI_CALL vkQueuePresentKHR(VkQueue queue, const VkPresentInfoKHR *pPr
 			runtime != nullptr)
 		{
 			VkSemaphore signal = VK_NULL_HANDLE;
-			if (runtime->on_present(pPresentInfo->pImageIndices[i], wait_semaphores.data(), static_cast<uint32_t>(wait_semaphores.size()), signal); signal != VK_NULL_HANDLE)
+			if (runtime->on_present(queue, pPresentInfo->pImageIndices[i], wait_semaphores, signal); signal != VK_NULL_HANDLE)
 			{
 				// The queue submit in 'on_present' now waits on the requested wait semaphores
 				// The next queue submit should therefore wait on the semaphore that was signaled by the last 'on_present' submit
@@ -854,6 +859,7 @@ VkResult VKAPI_CALL vkBeginCommandBuffer(VkCommandBuffer commandBuffer, const Vk
 	GET_DEVICE_DISPATCH_PTR(BeginCommandBuffer, commandBuffer);
 	return trampoline(commandBuffer, pBeginInfo);
 }
+
 
 void     VKAPI_CALL vkCmdBeginRenderPass(VkCommandBuffer commandBuffer, const VkRenderPassBeginInfo *pRenderPassBegin, VkSubpassContents contents)
 {

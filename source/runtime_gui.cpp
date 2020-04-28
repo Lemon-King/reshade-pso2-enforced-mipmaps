@@ -1,4 +1,4 @@
-/**
+/*
  * Copyright (C) 2014 Patrick Mours. All rights reserved.
  * License: https://github.com/crosire/reshade#license
  */
@@ -19,15 +19,15 @@
 extern volatile long g_network_traffic;
 extern std::filesystem::path g_reshade_dll_path;
 extern std::filesystem::path g_target_executable_path;
-static char s_reshadegui_ini_path[32767] = "";
 
 const ImVec4 COLOR_RED = ImColor(240, 100, 100);
 const ImVec4 COLOR_YELLOW = ImColor(204, 204, 0);
 
 void reshade::runtime::init_ui()
 {
-	const std::string reshadegui_ini_path = (g_reshade_dll_path.parent_path() / "ReShadeGUI.ini").u8string();
-	reshadegui_ini_path.copy(s_reshadegui_ini_path, sizeof(s_reshadegui_ini_path) - 1);
+	std::filesystem::path reshadegui_ini_path = _configuration_path;
+	reshadegui_ini_path.replace_filename("ReShadeGUI.ini");
+	_window_state_path = reshadegui_ini_path.u8string();
 
 	// Default shortcut: Home
 	_menu_key_data[0] = 0x24;
@@ -38,7 +38,6 @@ void reshade::runtime::init_ui()
 	_variable_editor_height = 300;
 
 	_imgui_context = ImGui::CreateContext();
-
 	auto &imgui_io = _imgui_context->IO;
 	auto &imgui_style = _imgui_context->Style;
 	imgui_io.IniFilename = nullptr;
@@ -116,7 +115,7 @@ void reshade::runtime::init_ui()
 		config.get("STYLE", "StyleIndex", _style_index);
 		config.get("STYLE", "EditorStyleIndex", _editor_style_index);
 
-		_imgui_context->IO.IniFilename = save_imgui_window_state ? s_reshadegui_ini_path : nullptr;
+		_imgui_context->IO.IniFilename = save_imgui_window_state ? _window_state_path.c_str() : nullptr;
 
 		// For compatibility with older versions, set the alpha value if it is missing
 		if (_fps_col[3] == 0.0f) _fps_col[3] = 1.0f;
@@ -368,7 +367,6 @@ void reshade::runtime::init_ui()
 		}
 	});
 }
-
 void reshade::runtime::deinit_ui()
 {
 	ImGui::DestroyContext(_imgui_context);
@@ -376,9 +374,7 @@ void reshade::runtime::deinit_ui()
 
 void reshade::runtime::build_font_atlas()
 {
-	ImGui::SetCurrentContext(_imgui_context);
-
-	const auto atlas = _imgui_context->IO.Fonts;
+	ImFontAtlas *const atlas = _imgui_context->IO.Fonts;
 	// Remove any existing fonts from atlas first
 	atlas->Clear();
 
@@ -416,8 +412,6 @@ void reshade::runtime::build_font_atlas()
 	unsigned char *pixels;
 	atlas->GetTexDataAsRGBA32(&pixels, &width, &height);
 
-	ImGui::SetCurrentContext(nullptr);
-
 	// Create font atlas texture and upload it
 	if (_imgui_font_atlas != nullptr)
 		destroy_texture(*_imgui_font_atlas);
@@ -434,12 +428,15 @@ void reshade::runtime::build_font_atlas()
 
 void reshade::runtime::draw_ui()
 {
+	assert(_is_initialized);
+
 	const bool show_splash = _show_splash && (is_loading() || !_reload_compile_queue.empty() || (_last_present_time - _last_reload_time) < std::chrono::seconds(5));
-	const bool show_screenshot_message = (_show_screenshot_message || !_screenshot_save_success) && _last_present_time - _last_screenshot_time < std::chrono::seconds(_screenshot_save_success ? 3 : 5);
+	// Do not show this message in the same frame the screenshot is taken (so that it won't show up on the UI screenshot)
+	const bool show_screenshot_message = (_show_screenshot_message || !_screenshot_save_success) && !_should_save_screenshot && (_last_present_time - _last_screenshot_time) < std::chrono::seconds(_screenshot_save_success ? 3 : 5);
 
 	if (_show_menu && !_ignore_shortcuts && !_imgui_context->IO.NavVisible && _input->is_key_pressed(0x1B /* VK_ESCAPE */))
 		_show_menu = false; // Close when pressing the escape button and not currently navigating with the keyboard
-	else if (!_ignore_shortcuts && _input->is_key_pressed(_menu_key_data) && _imgui_context->ActiveId == 0)
+	else if (!_ignore_shortcuts && _input->is_key_pressed(_menu_key_data, _force_shortcut_modifiers) && _imgui_context->ActiveId == 0)
 		_show_menu = !_show_menu;
 
 	_ignore_shortcuts = false;
@@ -821,7 +818,6 @@ void reshade::runtime::draw_ui_home()
 		if (error_message.size() > 50)
 		{
 			ImGui::TextColored(COLOR_RED, "%s", error_message.c_str());
-
 			ImGui::Spacing();
 		}
 		else
@@ -1031,7 +1027,6 @@ void reshade::runtime::draw_ui_home()
 		}
 	}
 }
-
 void reshade::runtime::draw_ui_settings()
 {
 	bool modified = false;
@@ -1092,7 +1087,7 @@ void reshade::runtime::draw_ui_settings()
 		if (ImGui::Checkbox("Save window state (ReShadeGUI.ini)", &save_imgui_window_state))
 		{
 			modified = true;
-			_imgui_context->IO.IniFilename = save_imgui_window_state ? s_reshadegui_ini_path : nullptr;
+			_imgui_context->IO.IniFilename = save_imgui_window_state ? _window_state_path.c_str() : nullptr;
 		}
 
 		modified |= ImGui::Checkbox("Group effect files with tabs instead of a tree", &_variable_editor_tabs);
@@ -1251,7 +1246,6 @@ void reshade::runtime::draw_ui_settings()
 	if (reload_style) // Style is applied in "load_config()".
 		load_config();
 }
-
 void reshade::runtime::draw_ui_statistics()
 {
 	unsigned int cpu_digits = 1;
@@ -1520,7 +1514,6 @@ void reshade::runtime::draw_ui_statistics()
 		ImGui::Text("Total memory usage: %ld.%03ld %s", memory_view.quot, memory_view.rem, memory_size_unit);
 	}
 }
-
 void reshade::runtime::draw_ui_log()
 {
 	if (ImGui::Button("Clear Log"))
@@ -1567,7 +1560,6 @@ void reshade::runtime::draw_ui_log()
 		}
 	} ImGui::EndChild();
 }
-
 void reshade::runtime::draw_ui_about()
 {
 	ImGui::TextUnformatted("ReShade " VERSION_STRING_FILE);
@@ -1696,29 +1688,31 @@ THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLI
 
 void reshade::runtime::draw_code_editor()
 {
-	if (_selected_effect < _effects.size() && (
-		ImGui::Button("Save", ImVec2(ImGui::GetContentRegionAvail().x, 0)) || _input->is_key_pressed('S', true, false, false)))
+	if (ImGui::Button("Save", ImVec2(ImGui::GetContentRegionAvail().x, 0)) || _input->is_key_pressed('S', true, false, false))
 	{
-		// Hide splash bar when reloading a single effect file
-		_show_splash = false;
-
 		// Write current editor text to file
 		const std::string text = _editor.get_text();
 		std::ofstream(_editor_file, std::ios::trunc).write(text.c_str(), text.size());
 
-		// Reload effect file
-		_reload_total_effects = 1;
-		_reload_remaining_effects = 1;
-		unload_effect(_selected_effect);
-		load_effect(_effects[_selected_effect].source_file, _selected_effect);
+		if (!is_loading() && _selected_effect < _effects.size())
+		{
+			// Hide splash bar when reloading a single effect file
+			_show_splash = false;
 
-		// Re-open current file so that errors are updated
-		open_file_in_code_editor(_selected_effect, _editor_file);
+			// Reload effect file
+			_reload_total_effects = 1;
+			_reload_remaining_effects = 1;
+			unload_effect(_selected_effect);
+			load_effect(_effects[_selected_effect].source_file, _selected_effect);
 
-		assert(_reload_remaining_effects == 0);
+			// Re-open current file so that errors are updated
+			open_file_in_code_editor(_selected_effect, _editor_file);
 
-		// Reloading an effect file invalidates all textures, but the statistics window may already have drawn references to those, so need to reset it
-		ImGui::FindWindowByName("Statistics")->DrawList->CmdBuffer.clear();
+			assert(_reload_remaining_effects == 0);
+
+			// Reloading an effect file invalidates all textures, but the statistics window may already have drawn references to those, so need to reset it
+			ImGui::FindWindowByName("Statistics")->DrawList->CmdBuffer.clear();
+		}
 	}
 
 	// Select editor font
@@ -2233,6 +2227,8 @@ void reshade::runtime::draw_variable_editor()
 		{
 			if (!ImGui::BeginTabItem(source_file.c_str()))
 				continue;
+			// Begin a new child here so scrolling through variables does not move the tab itself too
+			ImGui::BeginChild("##tab");
 		}
 		else
 		{
@@ -2527,9 +2523,14 @@ void reshade::runtime::draw_variable_editor()
 		}
 
 		if (_variable_editor_tabs)
+		{
+			ImGui::EndChild();
 			ImGui::EndTabItem();
+		}
 		else
+		{
 			ImGui::TreePop();
+		}
 
 		if (reload_effect)
 		{
@@ -2554,6 +2555,10 @@ void reshade::runtime::draw_variable_editor()
 				{
 					_last_reload_successful = reload_successful_before;
 					ImGui::OpenPopup("##pperror"); // Notify the user about this
+
+					// Update preset again now, so that the removed preprocessor definition does not reappear on a reload
+					// The preset is actually loaded again next frame to update the technique status (see 'update_and_render_effects'), so cannot use 'save_current_preset' here
+					ini_file::load_cache(_current_preset_path).set({}, "PreprocessorDefinitions", _preset_preprocessor_definitions);
 				}
 
 				// Re-open file in editor so that errors are updated
@@ -2579,7 +2584,6 @@ void reshade::runtime::draw_variable_editor()
 		ImGui::EndTabBar();
 	ImGui::EndChild();
 }
-
 void reshade::runtime::draw_technique_editor()
 {
 	size_t hovered_technique_index = std::numeric_limits<size_t>::max();
@@ -2775,13 +2779,13 @@ void reshade::runtime::open_file_in_code_editor(size_t effect_index, const std::
 		_editor_file.clear();
 		return;
 	}
+
 	// Only reload text if another file is opened (to keep undo history intact)
-	else if (_editor_file != path)
+	if (path != _editor_file)
 	{
 		// Load file to string and update editor text
 		_editor.set_text(std::string(std::istreambuf_iterator<char>(std::ifstream(path).rdbuf()), std::istreambuf_iterator<char>()));
 		_editor.set_readonly(false);
-
 		_editor_file = path;
 	}
 

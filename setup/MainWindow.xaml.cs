@@ -1,10 +1,11 @@
-﻿/**
+﻿/*
  * Copyright (C) 2014 Patrick Mours. All rights reserved.
  * License: https://github.com/crosire/reshade#license
  */
 
 using Microsoft.Win32;
-using ReShade.Utilities;
+using ReShade.Setup.Dialogs;
+using ReShade.Setup.Utilities;
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
@@ -31,9 +32,49 @@ namespace ReShade.Setup
 		string modulePath = null;
 		string commonPath = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData), "ReShade");
 
+		ZipArchive zip;
+		IniFile packagesIni;
+		IniFile compatibilityIni;
+
 		public MainWindow()
 		{
 			InitializeComponent();
+
+			var assembly = Assembly.GetExecutingAssembly();
+			Title = "ReShade Setup v" + assembly.GetName().Version.ToString(3);
+
+			try
+			{
+				// Extract archive attached to this executable
+				var output = new FileStream(Path.GetTempFileName(), FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.ReadWrite | FileShare.Delete, 4096, FileOptions.DeleteOnClose);
+
+				using (var input = File.OpenRead(assembly.Location))
+				{
+					byte[] block = new byte[512];
+					byte[] signature = { 0x50, 0x4B, 0x03, 0x04 }; // PK..
+
+					// Look for archive at the end of this executable and copy it to a file
+					while (input.Read(block, 0, block.Length) >= signature.Length)
+					{
+						if (block.Take(signature.Length).SequenceEqual(signature))
+						{
+							output.Write(block, 0, block.Length);
+							input.CopyTo(output);
+							break;
+						}
+					}
+				}
+
+				zip = new ZipArchive(output, ZipArchiveMode.Read, false);
+				packagesIni = new IniFile(assembly.GetManifestResourceStream("ReShade.Setup.EffectPackages.ini"));
+				compatibilityIni = new IniFile(assembly.GetManifestResourceStream("ReShade.Setup.Compatibility.ini"));
+			}
+			catch
+			{
+				MessageBox.Show("This setup archive is corrupted! Please download from https://reshade.me again.");
+				Environment.Exit(1);
+				return;
+			}
 
 			ApiVulkanGlobal.IsChecked = IsVulkanLayerEnabled(Registry.LocalMachine);
 
@@ -46,7 +87,7 @@ namespace ReShade.Setup
 
 		static void MoveFiles(string sourcePath, string targetPath)
 		{
-			if (!Directory.Exists(targetPath))
+			if (Directory.Exists(targetPath) == false)
 			{
 				Directory.CreateDirectory(targetPath);
 			}
@@ -56,6 +97,14 @@ namespace ReShade.Setup
 				string target = targetPath + source.Replace(sourcePath, string.Empty);
 
 				File.Copy(source, target, true);
+			}
+
+			// Copy files recursively
+			foreach (string source in Directory.GetDirectories(sourcePath))
+			{
+				string target = targetPath + source.Replace(sourcePath, string.Empty);
+
+				MoveFiles(source, target);
 			}
 		}
 		static bool IsWritable(string targetPath)
@@ -69,30 +118,6 @@ namespace ReShade.Setup
 			{
 				return false;
 			}
-		}
-
-		static ZipArchive ExtractArchive()
-		{
-			var output = new FileStream(Path.GetTempFileName(), FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.ReadWrite | FileShare.Delete, 4096, FileOptions.DeleteOnClose);
-
-			using (var input = File.OpenRead(Assembly.GetExecutingAssembly().Location))
-			{
-				byte[] block = new byte[512];
-				byte[] signature = { 0x50, 0x4B, 0x03, 0x04, 0x14, 0x00, 0x00, 0x00 }; // PK..
-
-				// Look for archive at the end of this executable and copy it to a file
-				while (input.Read(block, 0, block.Length) >= signature.Length)
-				{
-					if (block.Take(signature.Length).SequenceEqual(signature))
-					{
-						output.Write(block, 0, block.Length);
-						input.CopyTo(output);
-						break;
-					}
-				}
-			}
-
-			return new ZipArchive(output, ZipArchiveMode.Read, false);
 		}
 
 		void AddSearchPath(List<string> searchPaths, string newPath)
@@ -147,7 +172,7 @@ namespace ReShade.Setup
 				iniFile.SetValue("GENERAL", "TextureSearchPaths", paths.ToArray());
 			}
 
-			iniFile.Save();
+			iniFile.SaveFile();
 		}
 
 		bool EnableVulkanLayer(RegistryKey hive)
@@ -160,11 +185,7 @@ namespace ReShade.Setup
 				}
 
 				Directory.CreateDirectory(commonPath);
-
-				using (ZipArchive zip = ExtractArchive())
-				{
-					zip.ExtractToDirectory(commonPath);
-				}
+				zip.ExtractToDirectory(commonPath);
 
 				if (Environment.Is64BitOperatingSystem)
 				{
@@ -230,16 +251,16 @@ namespace ReShade.Setup
 			MessageDescription.Visibility = string.IsNullOrEmpty(description) ? Visibility.Collapsed : Visibility.Visible;
 			MessageDescription.Text = description;
 
-			Glass.HideSystemMenu(this);
+			AeroGlass.HideSystemMenu(this);
 		}
 		void UpdateStatusAndFinish(bool success, string message, string description = null)
 		{
 			isFinished = true;
 			SetupButton.IsEnabled = false; // Use button as text box only
 
-			UpdateStatus(success ? "ReShade installation was successful!" : "ReShade installation was not successful!", message, description);
+			UpdateStatus(success ? "ReShade Setup was successful!" : "ReShade Setup was not successful!", message, description);
 
-			Glass.HideSystemMenu(this, false);
+			AeroGlass.HideSystemMenu(this, false);
 
 			if (isHeadless)
 			{
@@ -249,23 +270,37 @@ namespace ReShade.Setup
 
 		bool RestartWithElevatedPrivileges()
 		{
-			var startInfo = new ProcessStartInfo {
+			var startInfo = new ProcessStartInfo
+			{
 				Verb = "runas",
 				FileName = Assembly.GetExecutingAssembly().Location,
 				Arguments = $"\"{targetPath}\" --elevated --left {Left} --top {Top}"
 			};
 
 			if (ApiD3D9.IsChecked.Value)
+			{
 				startInfo.Arguments += " --api d3d9";
+			}
+
 			if (ApiDXGI.IsChecked.Value)
+			{
 				startInfo.Arguments += " --api dxgi";
+			}
+
 			if (ApiOpenGL.IsChecked.Value)
+			{
 				startInfo.Arguments += " --api opengl";
+			}
+
 			if (ApiVulkan.IsChecked.Value)
+			{
 				startInfo.Arguments += " --api vulkan";
+			}
 
 			if (isFinished)
+			{
 				startInfo.Arguments += " --finished";
+			}
 
 			try
 			{
@@ -300,12 +335,29 @@ namespace ReShade.Setup
 			var info = FileVersionInfo.GetVersionInfo(targetPath);
 			targetName = info.FileDescription;
 			if (targetName is null || targetName.Trim().Length == 0)
+			{
 				targetName = Path.GetFileNameWithoutExtension(targetPath);
+			}
 
 			UpdateStatus("Working on " + targetName + " ...", "Analyzing executable ...");
 
 			var peInfo = new PEInfo(targetPath);
 			is64Bit = peInfo.Type == PEInfo.BinaryType.IMAGE_FILE_MACHINE_AMD64;
+
+			// Check whether the API is specified in the compatibility list, in which case setup can continue right away
+			var executableName = Path.GetFileName(targetPath);
+			if (compatibilityIni != null && compatibilityIni.HasValue(executableName, "RenderApi"))
+			{
+				string api = compatibilityIni.GetString(executableName, "RenderApi");
+
+				ApiD3D9.IsChecked = api == "D3D8" || api == "D3D9";
+				ApiDXGI.IsChecked = api == "D3D10" || api == "D3D11" || api == "D3D12" || api == "DXGI";
+				ApiOpenGL.IsChecked = api == "OpenGL";
+				ApiVulkan.IsChecked = api == "Vulkan";
+
+				InstallationStep2();
+				return;
+			}
 
 			bool isApiD3D8 = peInfo.Modules.Any(s => s.StartsWith("d3d8", StringComparison.OrdinalIgnoreCase));
 			bool isApiD3D9 = isApiD3D8 || peInfo.Modules.Any(s => s.StartsWith("d3d9", StringComparison.OrdinalIgnoreCase));
@@ -325,9 +377,9 @@ namespace ReShade.Setup
 			{
 				isApiDXGI = false; // Prefer Vulkan over Direct3D 12
 			}
-			if (isApiOpenGL && (isApiD3D9 || isApiDXGI || isApiVulkan))
+			if (isApiOpenGL && (isApiD3D8 || isApiD3D9 || isApiDXGI || isApiVulkan))
 			{
-				isApiOpenGL = false; // Prefer Vulkan over OpenGL
+				isApiOpenGL = false; // Prefer Vulkan and Direct3D over OpenGL
 			}
 
 			Message.Text = "Which rendering API does " + targetName + " use?";
@@ -388,6 +440,9 @@ namespace ReShade.Setup
 						InstallButtons.Visibility = Visibility.Visible;
 
 						Message.Text = "Existing ReShade installation found. How do you want to proceed?";
+
+						// Do not hide exit button when asking about existing installation, so user can abort installation
+						AeroGlass.HideSystemMenu(this, false);
 					}
 					else
 					{
@@ -401,36 +456,50 @@ namespace ReShade.Setup
 		}
 		void InstallationStep3()
 		{
-			Message.Text = "Installing ReShade ...";
+			ApiGroup.Visibility = Visibility.Visible;
+			InstallButtons.Visibility = Visibility.Collapsed;
+
+			UpdateStatus("Working on " + targetName + " ...", "Installing ReShade ...");
 
 			if (ApiVulkan.IsChecked != true)
 			{
-				ApiGroup.Visibility = Visibility.Visible;
-				InstallButtons.Visibility = Visibility.Collapsed;
-
 				try
 				{
-					using (ZipArchive zip = ExtractArchive())
+					var module = zip.GetEntry(is64Bit ? "ReShade64.dll" : "ReShade32.dll");
+					if (module == null)
 					{
-						if (zip.Entries.Count != 4)
-						{
-							throw new FileFormatException("Expected ReShade archive to contain ReShade DLLs");
-						}
+						throw new FileFormatException("Expected ReShade archive to contain ReShade DLLs");
+					}
 
-						// 0: ReShade32.dll
-						// 2: ReShade64.dll
-						using (Stream input = zip.Entries[is64Bit ? 2 : 0].Open())
-						using (FileStream output = File.Create(modulePath))
-						{
-							input.CopyTo(output);
-						}
+					using (Stream input = module.Open())
+					using (FileStream output = File.Create(modulePath))
+					{
+						input.CopyTo(output);
 					}
 				}
 				catch (Exception ex)
 				{
-					UpdateStatusAndFinish(false, "Unable to write " + Path.GetFileName(modulePath) + ".", ex.Message);
+					UpdateStatusAndFinish(false, "Failed to install " + Path.GetFileName(modulePath) + ".", ex.Message);
 					return;
 				}
+
+				// Create a default log file for troubleshooting
+				File.WriteAllText(Path.ChangeExtension(modulePath, ".log"), @"
+If you are reading this after launching the game at least once, it likely means ReShade was not loaded by the game.
+
+In that event here are some steps you can try to resolve this:
+
+1) Make sure this file and the related DLL are really in the same directory as the game executable.
+   If that is the case and it does not work regardless, check if there is a 'bin' directory, move them there and try again.
+
+2) Try running the game with elevated user permissions by doing a right click on its executable and choosing 'Run as administrator'.
+
+3) If the game crashes, try disabling all game overlays (like Origin), recording software (like Fraps), FPS displaying software,
+   GPU overclocking and tweaking software and other proxy DLLs (like ENB, Helix or Umod).
+
+4) If none of the above helps, you can get support on the forums at https://forum.reshade.me. But search for your problem before
+   creating a new topic, as somebody else may have already found a solution.
+");
 			}
 
 			// Copy potential pre-made configuration file to target
@@ -442,129 +511,189 @@ namespace ReShade.Setup
 				}
 				catch (Exception ex)
 				{
-					UpdateStatusAndFinish(false, "Unable to write " + Path.GetFileName(configPath) + ".", ex.Message);
+					UpdateStatusAndFinish(false, "Failed to install " + Path.GetFileName(configPath) + ".", ex.Message);
 					return;
 				}
 			}
 
-			if (!isHeadless)
+			// Add default configuration
+			var config = new IniFile(configPath);
+			if (compatibilityIni != null && !config.HasValue("GENERAL", "PreprocessorDefinitions"))
 			{
-				string targetPathShaders = Path.Combine(Path.GetDirectoryName(targetPath), "reshade-shaders", "Shaders");
+				config.SetValue("GENERAL", "PreprocessorDefinitions",
+					"RESHADE_DEPTH_LINEARIZATION_FAR_PLANE=1000.0",
+					"RESHADE_DEPTH_INPUT_IS_UPSIDE_DOWN=" + compatibilityIni.GetString(targetName, "DepthUpsideDown", "0"),
+					"RESHADE_DEPTH_INPUT_IS_REVERSED=" + compatibilityIni.GetString(targetName, "DepthReversed", "0"),
+					"RESHADE_DEPTH_INPUT_IS_LOGARITHMIC=" + compatibilityIni.GetString(targetName, "DepthLogarithmic", "0"));
 
-				string[] installedEffects = null;
-				if (Directory.Exists(targetPathShaders))
+				if (compatibilityIni.HasValue(targetName, "DepthCopyBeforeClears") ||
+					compatibilityIni.HasValue(targetName, "UseAspectRatioHeuristics"))
 				{
-					installedEffects = Directory.GetFiles(targetPathShaders).Select(x => Path.GetFileName(x)).ToArray();
-				}
-
-				var dlg = new SelectEffectsDialog();
-				dlg.Owner = this;
-
-				// If there was an existing installation, select the same effects as previously
-				if (installedEffects != null)
-				{
-					foreach (EffectRepositoryItem repository in dlg.EffectList.Items)
+					switch (compatibilityIni.GetString(targetName, "RenderApi"))
 					{
-						foreach (EffectItem item in repository.Effects)
-						{
-							item.Enabled = installedEffects.Contains(Path.GetFileName(item.Path));
-						}
+						case "D3D9":
+							config.SetValue("DX9_BUFFER_DETECTION", "PreserveDepthBuffer", compatibilityIni.GetString(targetName, "DepthCopyBeforeClears", "0"));
+							config.SetValue("DX9_BUFFER_DETECTION", "UseAspectRatioHeuristics", compatibilityIni.GetString(targetName, "UseAspectRatioHeuristics", "1"));
+							break;
+						case "D3D10":
+							config.SetValue("DX10_BUFFER_DETECTION", "DepthBufferRetrievalMode", compatibilityIni.GetString(targetName, "DepthCopyBeforeClears", "0"));
+							config.SetValue("DX10_BUFFER_DETECTION", "UseAspectRatioHeuristics", compatibilityIni.GetString(targetName, "UseAspectRatioHeuristics", "1"));
+							break;
+						case "D3D11":
+							config.SetValue("DX11_BUFFER_DETECTION", "DepthBufferRetrievalMode", compatibilityIni.GetString(targetName, "DepthCopyBeforeClears", "0"));
+							config.SetValue("DX11_BUFFER_DETECTION", "UseAspectRatioHeuristics", compatibilityIni.GetString(targetName, "UseAspectRatioHeuristics", "1"));
+							break;
+						case "D3D12":
+							config.SetValue("DX12_BUFFER_DETECTION", "DepthBufferRetrievalMode", compatibilityIni.GetString(targetName, "DepthCopyBeforeClears", "0"));
+							config.SetValue("DX12_BUFFER_DETECTION", "UseAspectRatioHeuristics", compatibilityIni.GetString(targetName, "UseAspectRatioHeuristics", "1"));
+							break;
 					}
 				}
 
+				config.SaveFile();
+			}
+
+			// Only show the selection dialog if there are actually packages to choose
+			if (!isHeadless && packagesIni != null && packagesIni.GetSections().Length != 0)
+			{
+				var dlg = new SelectPackagesDialog(packagesIni);
+				dlg.Owner = this;
+
 				if (dlg.ShowDialog() == true)
 				{
-					var repositoryItems = dlg.EffectList.Items.Cast<EffectRepositoryItem>();
-					var repositoryNames = new Queue<string>(repositoryItems.Where(x => x.Enabled != false).Select(x => x.Name));
+					var packages = new Queue<EffectPackage>(dlg.EnabledItems);
 
-					if (repositoryNames.Count != 0)
+					if (packages.Count != 0)
 					{
-						InstallationStep4(repositoryNames, repositoryItems.SelectMany(x => x.Effects).Where(x => !x.Enabled.Value).Select(x => Path.GetFileName(x.Path)).ToList());
+						InstallationStep4(packages);
 						return;
 					}
 				}
 			}
 
 			// Add default search paths if no config exists
-			if (!File.Exists(configPath))
+			if (!config.HasValue("GENERAL", "EffectSearchPaths") && !config.HasValue("GENERAL", "TextureSearchPaths"))
 			{
 				WriteSearchPaths(".\\", ".\\");
 			}
 
 			InstallationStep6();
 		}
-		void InstallationStep4(Queue<string> repositories, List<string> disabledFiles)
+		void InstallationStep4(Queue<EffectPackage> packages)
 		{
 			ApiGroup.IsEnabled = false;
 			SetupButton.IsEnabled = false;
 			ApiGroup.Visibility = ApiD3D9.Visibility = ApiDXGI.Visibility = ApiOpenGL.Visibility = ApiVulkan.Visibility = Visibility.Visible;
 			ApiVulkanGlobal.Visibility = ApiVulkanGlobalButton.Visibility = Visibility.Collapsed;
 
-			string repository = repositories.Dequeue();
-			string downloadPath = Path.GetTempFileName();
+			var package = packages.Dequeue();
+			var downloadPath = Path.GetTempFileName();
 
-			UpdateStatus("Working on " + targetName + " ...", "Downloading " + repository + " ...");
+			UpdateStatus("Working on " + targetName + " ...", "Downloading " + package.PackageName + " ...", package.DownloadUrl);
 
 			// Add support for TLS 1.2, so that HTTPS connection to GitHub succeeds
 			ServicePointManager.SecurityProtocol |= SecurityProtocolType.Tls12;
 
 			var client = new WebClient();
 
-			client.DownloadFileCompleted += (object sender, System.ComponentModel.AsyncCompletedEventArgs e) => {
+			client.DownloadFileCompleted += (object sender, System.ComponentModel.AsyncCompletedEventArgs e) =>
+			{
 				if (e.Error != null)
 				{
-					UpdateStatusAndFinish(false, "Unable to download from " + repository + ".", e.Error.Message);
+					UpdateStatusAndFinish(false, "Failed to download from " + package.DownloadUrl + ".", e.Error.Message);
 				}
 				else
 				{
-					InstallationStep5(downloadPath, repository.Substring(repository.IndexOf('/') + 1) + "-master", disabledFiles);
+					InstallationStep5(downloadPath, package);
 
-					if (repositories.Count != 0)
+					if (packages.Count != 0)
 					{
-						InstallationStep4(repositories, disabledFiles);
+						InstallationStep4(packages);
 					}
 				}
 			};
 
-			client.DownloadProgressChanged += (object sender, DownloadProgressChangedEventArgs e) => {
+			client.DownloadProgressChanged += (object sender, DownloadProgressChangedEventArgs e) =>
+			{
 				// Avoid negative percentage values
 				if (e.TotalBytesToReceive > 0)
 				{
-					Message.Text = "Downloading " + repository + " ... (" + ((100 * e.BytesReceived) / e.TotalBytesToReceive) + "%)";
+					Message.Text = "Downloading " + package.PackageName + " ... (" + ((100 * e.BytesReceived) / e.TotalBytesToReceive) + "%)";
 				}
 			};
 
 			try
 			{
-				client.DownloadFileAsync(new Uri("https://github.com/" + repository + "/archive/master.zip"), downloadPath);
+				client.DownloadFileAsync(new Uri(package.DownloadUrl), downloadPath);
 			}
 			catch (Exception ex)
 			{
-				UpdateStatusAndFinish(false, "Unable to download from " + repository + ".", ex.Message);
+				UpdateStatusAndFinish(false, "Failed to download from " + package.DownloadUrl + ".", ex.Message);
 			}
 		}
-		void InstallationStep5(string downloadPath, string downloadName, List<string> disabledFiles)
+		void InstallationStep5(string downloadPath, EffectPackage package)
 		{
-			UpdateStatus("Working on " + targetName + " ...", "Extracting " + downloadName + " ...");
+			UpdateStatus("Working on " + targetName + " ...", "Extracting " + package.PackageName + " ...");
 
-			string tempPath = Path.Combine(Path.GetTempPath(), downloadName);
-			string tempPathShaders = Path.Combine(tempPath, "Shaders");
-			string tempPathTextures = Path.Combine(tempPath, "Textures");
-			string targetPath = Path.Combine(Path.GetDirectoryName(this.targetPath), "reshade-shaders");
-			string targetPathShaders = Path.Combine(targetPath, "Shaders");
-			string targetPathTextures = Path.Combine(targetPath, "Textures");
+			string tempPath = Path.Combine(Path.GetTempPath(), "reshade-shaders");
 
 			try
 			{
-				if (Directory.Exists(tempPath)) // Delete existing directories since extraction fails if the target is not empty
+				// Delete existing directories since extraction fails if the target is not empty
+				if (Directory.Exists(tempPath))
 				{
 					Directory.Delete(tempPath, true);
 				}
 
-				ZipFile.ExtractToDirectory(downloadPath, Path.GetTempPath());
+				ZipFile.ExtractToDirectory(downloadPath, tempPath);
 
-				MoveFiles(tempPathShaders, targetPathShaders);
-				if (Directory.Exists(tempPathTextures))
+				// First check for a standard folder name
+				string tempPathShaders = Directory.GetDirectories(tempPath, "Shaders", SearchOption.AllDirectories).FirstOrDefault();
+				string tempPathTextures = Directory.GetDirectories(tempPath, "Textures", SearchOption.AllDirectories).FirstOrDefault();
+				string targetPathShaders = Path.Combine(Path.GetDirectoryName(targetPath), package.InstallPath);
+				string targetPathTextures = Path.Combine(Path.GetDirectoryName(targetPath), package.TextureInstallPath);
+
+				// If that does not exist, look for the first directory that contains shaders/textures
+				string[] effects = Directory.GetFiles(tempPath, "*.fx", SearchOption.AllDirectories);
+				if (tempPathShaders == null)
+				{
+					tempPathShaders = effects.Select(x => Path.GetDirectoryName(x)).OrderBy(x => x.Length).FirstOrDefault();
+				}
+				if (tempPathTextures == null)
+				{
+					string[] tempTextureExtensions = { "*.png", "*.jpg", "*.jpeg" };
+
+					foreach (string extension in tempTextureExtensions)
+					{
+						string path = Directory.GetFiles(tempPath, extension, SearchOption.AllDirectories).Select(x => Path.GetDirectoryName(x)).OrderBy(x => x.Length).FirstOrDefault();
+						tempPathTextures = tempPathTextures != null ? tempPathTextures.Union(path).ToString() : path;
+					}
+				}
+
+				// Show file selection dialog
+				if (!isHeadless)
+				{
+					effects = effects.Select(x => targetPathShaders + x.Remove(0, tempPathShaders.Length)).ToArray();
+
+					var dlg = new SelectEffectsDialog(package.PackageName, effects);
+					dlg.Owner = this;
+
+					if (dlg.ShowDialog() == true)
+					{
+						// Delete all unselected effect files before moving
+						foreach (string filePath in effects.Except(dlg.EnabledItems.Select(x => x.FilePath)))
+						{
+							File.Delete(tempPathShaders + filePath.Remove(0, targetPathShaders.Length));
+						}
+					}
+				}
+
+				// Move only the relevant files to the target
+				if (tempPathShaders != null)
+				{
+					MoveFiles(tempPathShaders, targetPathShaders);
+				}
+				if (tempPathTextures != null)
 				{
 					MoveFiles(tempPathTextures, targetPathTextures);
 				}
@@ -574,23 +703,11 @@ namespace ReShade.Setup
 			}
 			catch (Exception ex)
 			{
-				UpdateStatusAndFinish(false, "Unable to extract " + downloadName + ".", ex.Message);
+				UpdateStatusAndFinish(false, "Failed to extract " + package.PackageName + ".", ex.Message);
 				return;
 			}
 
-			foreach (var filename in disabledFiles)
-			{
-				try
-				{
-					File.Delete(Path.Combine(targetPathShaders, filename));
-				}
-				catch
-				{
-					continue;
-				}
-			}
-
-			WriteSearchPaths(".\\reshade-shaders\\Shaders", ".\\reshade-shaders\\Textures");
+			WriteSearchPaths(package.InstallPath, package.TextureInstallPath);
 
 			InstallationStep6();
 		}
@@ -628,8 +745,8 @@ namespace ReShade.Setup
 
 		void OnWindowInit(object sender, EventArgs e)
 		{
-			Glass.HideIcon(this);
-			Glass.ExtendFrame(this);
+			AeroGlass.HideIcon(this);
+			AeroGlass.ExtendFrame(this);
 		}
 		void OnWindowLoaded(object sender, RoutedEventArgs e)
 		{
@@ -809,7 +926,7 @@ namespace ReShade.Setup
 			}
 			catch (Exception ex)
 			{
-				UpdateStatusAndFinish(false, "Unable to delete ReShade files.", ex.Message);
+				UpdateStatusAndFinish(false, "Failed to delete some ReShade files.", ex.Message);
 			}
 		}
 
@@ -825,14 +942,11 @@ namespace ReShade.Setup
 			{
 				try
 				{
-					using (ZipArchive zip = ExtractArchive())
-					{
-						zip.ExtractToDirectory(".");
-					}
+					zip.ExtractToDirectory(".");
 				}
 				catch (Exception ex)
 				{
-					UpdateStatusAndFinish(false, "Unable to extract ReShade files.", ex.Message);
+					UpdateStatusAndFinish(false, "Failed to extract some ReShade files.", ex.Message);
 					return;
 				}
 
@@ -840,14 +954,35 @@ namespace ReShade.Setup
 				return;
 			}
 
-			var dlg = new SelectAppDialog();
-			dlg.Owner = this;
-
-			if (dlg.ShowDialog() == true)
+			if (Keyboard.Modifiers == ModifierKeys.Alt)
 			{
-				targetPath = dlg.FileName;
+				var dlg = new OpenFileDialog
+				{
+					Filter = "Applications|*.exe",
+					DefaultExt = ".exe",
+					Multiselect = false,
+					ValidateNames = true,
+					CheckFileExists = true
+				};
 
-				InstallationStep0();
+				if (dlg.ShowDialog(this) == true)
+				{
+					targetPath = dlg.FileName;
+
+					InstallationStep0();
+				}
+			}
+			else
+			{
+				var dlg = new SelectAppDialog();
+				dlg.Owner = this;
+
+				if (dlg.ShowDialog() == true)
+				{
+					targetPath = dlg.FileName;
+
+					InstallationStep0();
+				}
 			}
 		}
 		void OnSetupButtonDragDrop(object sender, DragEventArgs e)

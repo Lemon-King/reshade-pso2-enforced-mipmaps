@@ -1,4 +1,4 @@
-/**
+/*
  * Copyright (C) 2014 Patrick Mours. All rights reserved.
  * License: https://github.com/crosire/reshade#license
  */
@@ -17,25 +17,44 @@
 #include "d3d12/runtime_d3d12.hpp"
 #include <CoreWindow.h>
 
+extern thread_local bool g_in_dxgi_runtime;
+
+static void dump_sample_desc(const DXGI_SAMPLE_DESC &desc)
+{
+	LOG(INFO) <<     "  | SampleCount                             | " << std::setw(39) << desc.Count   << " |";
+
+	switch (desc.Quality)
+	{
+	case D3D11_CENTER_MULTISAMPLE_PATTERN:
+		LOG(INFO) << "  | SampleQuality                           | D3D11_CENTER_MULTISAMPLE_PATTERN        |";
+		break;
+	case D3D11_STANDARD_MULTISAMPLE_PATTERN:
+		LOG(INFO) << "  | SampleQuality                           | D3D11_STANDARD_MULTISAMPLE_PATTERN      |";
+		break;
+	default:
+		LOG(INFO) << "  | SampleQuality                           | " << std::setw(39) << desc.Quality << " |";
+		break;
+	}
+}
+
 static void dump_swapchain_desc(const DXGI_SWAP_CHAIN_DESC &desc)
 {
 	LOG(INFO) << "> Dumping swap chain description:";
 	LOG(INFO) << "  +-----------------------------------------+-----------------------------------------+";
 	LOG(INFO) << "  | Parameter                               | Value                                   |";
 	LOG(INFO) << "  +-----------------------------------------+-----------------------------------------+";
-	LOG(INFO) << "  | Width                                   | " << std::setw(39) << desc.BufferDesc.Width << " |";
-	LOG(INFO) << "  | Height                                  | " << std::setw(39) << desc.BufferDesc.Height << " |";
+	LOG(INFO) << "  | Width                                   | " << std::setw(39) << desc.BufferDesc.Width   << " |";
+	LOG(INFO) << "  | Height                                  | " << std::setw(39) << desc.BufferDesc.Height  << " |";
 	LOG(INFO) << "  | RefreshRate                             | " << std::setw(19) << desc.BufferDesc.RefreshRate.Numerator << ' ' << std::setw(19) << desc.BufferDesc.RefreshRate.Denominator << " |";
-	LOG(INFO) << "  | Format                                  | " << std::setw(39) << desc.BufferDesc.Format << " |";
-	LOG(INFO) << "  | ScanlineOrdering                        | " << std::setw(39) << desc.BufferDesc.ScanlineOrdering << " |";
+	LOG(INFO) << "  | Format                                  | " << std::setw(39) << desc.BufferDesc.Format  << " |";
+	LOG(INFO) << "  | ScanlineOrdering                        | " << std::setw(39) << desc.BufferDesc.ScanlineOrdering   << " |";
 	LOG(INFO) << "  | Scaling                                 | " << std::setw(39) << desc.BufferDesc.Scaling << " |";
-	LOG(INFO) << "  | SampleCount                             | " << std::setw(39) << desc.SampleDesc.Count << " |";
-	LOG(INFO) << "  | SampleQuality                           | " << std::setw(39) << desc.SampleDesc.Quality << " |";
-	LOG(INFO) << "  | BufferUsage                             | " << std::setw(39) << desc.BufferUsage << " |";
-	LOG(INFO) << "  | BufferCount                             | " << std::setw(39) << desc.BufferCount << " |";
+	dump_sample_desc(desc.SampleDesc);
+	LOG(INFO) << "  | BufferUsage                             | " << std::setw(39) << desc.BufferUsage  << " |";
+	LOG(INFO) << "  | BufferCount                             | " << std::setw(39) << desc.BufferCount  << " |";
 	LOG(INFO) << "  | OutputWindow                            | " << std::setw(39) << desc.OutputWindow << " |";
-	LOG(INFO) << "  | Windowed                                | " << std::setw(39) << (desc.Windowed != FALSE ? "TRUE" : "FALSE") << " |";
-	LOG(INFO) << "  | SwapEffect                              | " << std::setw(39) << desc.SwapEffect << " |";
+	LOG(INFO) << "  | Windowed                                | " << std::setw(39) << (desc.Windowed ? "TRUE" : "FALSE") << " |";
+	LOG(INFO) << "  | SwapEffect                              | " << std::setw(39) << desc.SwapEffect   << " |";
 	LOG(INFO) << "  | Flags                                   | " << std::setw(39) << std::hex << desc.Flags << std::dec << " |";
 	LOG(INFO) << "  +-----------------------------------------+-----------------------------------------+";
 }
@@ -45,17 +64,16 @@ static void dump_swapchain_desc(const DXGI_SWAP_CHAIN_DESC1 &desc)
 	LOG(INFO) << "  +-----------------------------------------+-----------------------------------------+";
 	LOG(INFO) << "  | Parameter                               | Value                                   |";
 	LOG(INFO) << "  +-----------------------------------------+-----------------------------------------+";
-	LOG(INFO) << "  | Width                                   | " << std::setw(39) << desc.Width << " |";
-	LOG(INFO) << "  | Height                                  | " << std::setw(39) << desc.Height << " |";
-	LOG(INFO) << "  | Format                                  | " << std::setw(39) << desc.Format << " |";
-	LOG(INFO) << "  | Stereo                                  | " << std::setw(39) << (desc.Stereo != FALSE ? "TRUE" : "FALSE") << " |";
-	LOG(INFO) << "  | SampleCount                             | " << std::setw(39) << desc.SampleDesc.Count << " |";
-	LOG(INFO) << "  | SampleQuality                           | " << std::setw(39) << desc.SampleDesc.Quality << " |";
+	LOG(INFO) << "  | Width                                   | " << std::setw(39) << desc.Width   << " |";
+	LOG(INFO) << "  | Height                                  | " << std::setw(39) << desc.Height  << " |";
+	LOG(INFO) << "  | Format                                  | " << std::setw(39) << desc.Format  << " |";
+	LOG(INFO) << "  | Stereo                                  | " << std::setw(39) << (desc.Stereo ? "TRUE" : "FALSE") << " |";
+	dump_sample_desc(desc.SampleDesc);
 	LOG(INFO) << "  | BufferUsage                             | " << std::setw(39) << desc.BufferUsage << " |";
 	LOG(INFO) << "  | BufferCount                             | " << std::setw(39) << desc.BufferCount << " |";
-	LOG(INFO) << "  | Scaling                                 | " << std::setw(39) << desc.Scaling << " |";
-	LOG(INFO) << "  | SwapEffect                              | " << std::setw(39) << desc.SwapEffect << " |";
-	LOG(INFO) << "  | AlphaMode                               | " << std::setw(39) << desc.AlphaMode << " |";
+	LOG(INFO) << "  | Scaling                                 | " << std::setw(39) << desc.Scaling     << " |";
+	LOG(INFO) << "  | SwapEffect                              | " << std::setw(39) << desc.SwapEffect  << " |";
+	LOG(INFO) << "  | AlphaMode                               | " << std::setw(39) << desc.AlphaMode   << " |";
 	LOG(INFO) << "  | Flags                                   | " << std::setw(39) << std::hex << desc.Flags << std::dec << " |";
 	LOG(INFO) << "  +-----------------------------------------+-----------------------------------------+";
 }
@@ -177,7 +195,9 @@ HRESULT STDMETHODCALLTYPE IDXGIFactory_CreateSwapChain(IDXGIFactory *pFactory, I
 	const unsigned int direct3d_version =
 		query_device(pDevice, device_proxy);
 
+	g_in_dxgi_runtime = true;
 	const HRESULT hr = reshade::hooks::call(IDXGIFactory_CreateSwapChain, vtable_from_instance(pFactory) + 10)(pFactory, pDevice, pDesc, ppSwapChain);
+	g_in_dxgi_runtime = false;
 	if (FAILED(hr))
 	{
 		LOG(WARN) << "IDXGIFactory::CreateSwapChain failed with error code " << hr << '!';
@@ -293,7 +313,7 @@ HOOK_EXPORT HRESULT WINAPI CreateDXGIFactory(REFIID riid, void **ppFactory)
 	LOG(INFO) << "Redirecting CreateDXGIFactory" << '(' << "riid = " << riid << ", ppFactory = " << ppFactory << ')' << " ...";
 	LOG(INFO) << "> Passing on to CreateDXGIFactory1:";
 
-	// DXGI1.1 should always be available, so to simplify code just 'CreateDXGIFactory' which is otherwise identical
+	// DXGI 1.1 should always be available, so to simplify code just call 'CreateDXGIFactory' which is otherwise identical
 	return CreateDXGIFactory1(riid, ppFactory);
 }
 HOOK_EXPORT HRESULT WINAPI CreateDXGIFactory1(REFIID riid, void **ppFactory)
@@ -309,18 +329,18 @@ HOOK_EXPORT HRESULT WINAPI CreateDXGIFactory1(REFIID riid, void **ppFactory)
 
 	IDXGIFactory *const factory = static_cast<IDXGIFactory *>(*ppFactory);
 
-	reshade::hooks::install("IDXGIFactory::CreateSwapChain", vtable_from_instance(factory), 10, reinterpret_cast<reshade::hook::address>(&IDXGIFactory_CreateSwapChain));
+	reshade::hooks::install("IDXGIFactory::CreateSwapChain", vtable_from_instance(factory), 10, reinterpret_cast<reshade::hook::address>(IDXGIFactory_CreateSwapChain));
 
-	// Check for DXGI1.2 support and install IDXGIFactory2 hooks if it exists
+	// Check for DXGI 1.2 support and install IDXGIFactory2 hooks if it exists
 	if (com_ptr<IDXGIFactory2> factory2; SUCCEEDED(factory->QueryInterface(&factory2)))
 	{
-		reshade::hooks::install("IDXGIFactory2::CreateSwapChainForHwnd", vtable_from_instance(factory2.get()), 15, reinterpret_cast<reshade::hook::address>(&IDXGIFactory2_CreateSwapChainForHwnd));
-		reshade::hooks::install("IDXGIFactory2::CreateSwapChainForCoreWindow", vtable_from_instance(factory2.get()), 16, reinterpret_cast<reshade::hook::address>(&IDXGIFactory2_CreateSwapChainForCoreWindow));
-		reshade::hooks::install("IDXGIFactory2::CreateSwapChainForComposition", vtable_from_instance(factory2.get()), 24, reinterpret_cast<reshade::hook::address>(&IDXGIFactory2_CreateSwapChainForComposition));
+		reshade::hooks::install("IDXGIFactory2::CreateSwapChainForHwnd", vtable_from_instance(factory2.get()), 15, reinterpret_cast<reshade::hook::address>(IDXGIFactory2_CreateSwapChainForHwnd));
+		reshade::hooks::install("IDXGIFactory2::CreateSwapChainForCoreWindow", vtable_from_instance(factory2.get()), 16, reinterpret_cast<reshade::hook::address>(IDXGIFactory2_CreateSwapChainForCoreWindow));
+		reshade::hooks::install("IDXGIFactory2::CreateSwapChainForComposition", vtable_from_instance(factory2.get()), 24, reinterpret_cast<reshade::hook::address>(IDXGIFactory2_CreateSwapChainForComposition));
 	}
 
 #if RESHADE_VERBOSE_LOG
-	LOG(INFO) << "Returning IDXGIFactory object " << *ppFactory << '.';
+	LOG(INFO) << "Returning IDXGIFactory object " << factory << '.';
 #endif
 	return hr;
 }
@@ -352,16 +372,30 @@ HOOK_EXPORT HRESULT WINAPI CreateDXGIFactory2(UINT Flags, REFIID riid, void **pp
 		return hr;
 	}
 
-	// We can pretty much assume support for DXGI1.2 at this point
-	IDXGIFactory2 *const factory = static_cast<IDXGIFactory2 *>(*ppFactory);
+	IDXGIFactory *const factory = static_cast<IDXGIFactory *>(*ppFactory);
 
-	reshade::hooks::install("IDXGIFactory::CreateSwapChain", vtable_from_instance(factory), 10, reinterpret_cast<reshade::hook::address>(&IDXGIFactory_CreateSwapChain));
-	reshade::hooks::install("IDXGIFactory2::CreateSwapChainForHwnd", vtable_from_instance(factory), 15, reinterpret_cast<reshade::hook::address>(&IDXGIFactory2_CreateSwapChainForHwnd));
-	reshade::hooks::install("IDXGIFactory2::CreateSwapChainForCoreWindow", vtable_from_instance(factory), 16, reinterpret_cast<reshade::hook::address>(&IDXGIFactory2_CreateSwapChainForCoreWindow));
-	reshade::hooks::install("IDXGIFactory2::CreateSwapChainForComposition", vtable_from_instance(factory), 24, reinterpret_cast<reshade::hook::address>(&IDXGIFactory2_CreateSwapChainForComposition));
+	reshade::hooks::install("IDXGIFactory::CreateSwapChain", vtable_from_instance(factory), 10, reinterpret_cast<reshade::hook::address>(IDXGIFactory_CreateSwapChain));
+
+	if (com_ptr<IDXGIFactory2> factory2; SUCCEEDED(factory->QueryInterface(&factory2)))
+	{
+		reshade::hooks::install("IDXGIFactory2::CreateSwapChainForHwnd", vtable_from_instance(factory2.get()), 15, reinterpret_cast<reshade::hook::address>(IDXGIFactory2_CreateSwapChainForHwnd));
+		reshade::hooks::install("IDXGIFactory2::CreateSwapChainForCoreWindow", vtable_from_instance(factory2.get()), 16, reinterpret_cast<reshade::hook::address>(IDXGIFactory2_CreateSwapChainForCoreWindow));
+		reshade::hooks::install("IDXGIFactory2::CreateSwapChainForComposition", vtable_from_instance(factory2.get()), 24, reinterpret_cast<reshade::hook::address>(IDXGIFactory2_CreateSwapChainForComposition));
+	}
 
 #if RESHADE_VERBOSE_LOG
-	LOG(INFO) << "Returning IDXGIFactory object " << *ppFactory << '.';
+	LOG(INFO) << "Returning IDXGIFactory object " << factory << '.';
 #endif
 	return hr;
+}
+
+HOOK_EXPORT HRESULT WINAPI DXGIGetDebugInterface1(UINT Flags, REFIID riid, void **pDebug)
+{
+	static const auto trampoline = reshade::hooks::call(DXGIGetDebugInterface1);
+
+	// DXGIGetDebugInterface1 is not available on Windows 7, so act as if Windows SDK is not installed
+	if (trampoline == nullptr)
+		return E_NOINTERFACE;
+
+	return trampoline(Flags, riid, pDebug);
 }

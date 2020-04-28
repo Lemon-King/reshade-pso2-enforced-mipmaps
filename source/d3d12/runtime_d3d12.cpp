@@ -1,4 +1,4 @@
-/**
+/*
  * Copyright (C) 2014 Patrick Mours. All rights reserved.
  * License: https://github.com/crosire/reshade#license
  */
@@ -9,7 +9,7 @@
 #include "runtime_d3d12.hpp"
 #include "runtime_config.hpp"
 #include "runtime_objects.hpp"
-#include "../dxgi/format_utils.hpp"
+#include "dxgi/format_utils.hpp"
 #include <imgui.h>
 #include <imgui_internal.h>
 #include <d3dcompiler.h>
@@ -146,6 +146,7 @@ bool reshade::d3d12::runtime_d3d12::on_init(const DXGI_SWAP_CHAIN_DESC &swap_des
 	{
 		_backbuffers.resize(1);
 		_backbuffers[0] = backbuffer;
+		assert(swap_desc.BufferCount == 1);
 	}
 #endif
 
@@ -312,6 +313,10 @@ void reshade::d3d12::runtime_d3d12::on_reset()
 {
 	runtime::on_reset();
 
+	// Make sure none of the resources below are currently in use (provided the runtime was initialized previously)
+	if (!_fence.empty() && !_fence_value.empty())
+		wait_for_command_queue();
+
 	_cmd_list.reset();
 	_cmd_alloc.clear();
 
@@ -448,7 +453,6 @@ bool reshade::d3d12::runtime_d3d12::capture_screenshot(uint8_t *buffer) const
 	transition_state(_cmd_list, _backbuffers[_swap_index], D3D12_RESOURCE_STATE_COPY_SOURCE, D3D12_RESOURCE_STATE_RENDER_TARGET, 0);
 
 	// Execute and wait for completion
-	execute_command_list();
 	if (!wait_for_command_queue())
 		return false;
 
@@ -505,7 +509,7 @@ bool reshade::d3d12::runtime_d3d12::init_effect(size_t index)
 	std::unordered_map<std::string, com_ptr<ID3DBlob>> entry_points;
 
 	// Compile the generated HLSL source code to DX byte code
-	for (const auto &entry_point : effect.module.entry_points)
+	for (const reshadefx::entry_point &entry_point : effect.module.entry_points)
 	{
 		com_ptr<ID3DBlob> d3d_errors;
 
@@ -592,7 +596,7 @@ bool reshade::d3d12::runtime_d3d12::init_effect(size_t index)
 	}
 
 	{   D3D12_DESCRIPTOR_HEAP_DESC desc = { D3D12_DESCRIPTOR_HEAP_TYPE_RTV };
-		for (auto &info : effect.module.techniques)
+		for (const reshadefx::technique_info &info : effect.module.techniques)
 			desc.NumDescriptors += static_cast<UINT>(8 * info.passes.size());
 
 		if (FAILED(_device->CreateDescriptorHeap(&desc, IID_PPV_ARGS(&effect_data.rtv_heap))))
@@ -644,7 +648,7 @@ bool reshade::d3d12::runtime_d3d12::init_effect(size_t index)
 			break;
 		case texture_reference::depth_buffer:
 #if RESHADE_DEPTH
-			resource = _depth_texture; // Note: This may be null
+			resource = _depth_texture; // Note: This can be a "nullptr"
 #endif
 			// Keep track of the depth buffer texture descriptor to simplify updating it
 			effect_data.depth_texture_binding = srv_handle;
@@ -756,7 +760,21 @@ bool reshade::d3d12::runtime_d3d12::init_effect(size_t index)
 			pso_desc.DSVFormat = DXGI_FORMAT_D24_UNORM_S8_UINT;
 			pso_desc.SampleMask = UINT_MAX;
 			pso_desc.SampleDesc = { 1, 0 };
-			pso_desc.PrimitiveTopologyType = D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE;
+
+			switch (pass_info.topology)
+			{
+			case reshadefx::primitive_topology::point_list:
+				pso_desc.PrimitiveTopologyType = D3D12_PRIMITIVE_TOPOLOGY_TYPE_POINT;
+				break;
+			case reshadefx::primitive_topology::line_list:
+			case reshadefx::primitive_topology::line_strip:
+				pso_desc.PrimitiveTopologyType = D3D12_PRIMITIVE_TOPOLOGY_TYPE_LINE;
+				break;
+			case reshadefx::primitive_topology::triangle_list:
+			case reshadefx::primitive_topology::triangle_strip:
+				pso_desc.PrimitiveTopologyType = D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE;
+				break;
+			}
 
 			{   D3D12_BLEND_DESC &desc = pso_desc.BlendState;
 				desc.RenderTarget[0].BlendEnable = pass_info.blend_enable;
@@ -859,7 +877,7 @@ bool reshade::d3d12::runtime_d3d12::init_effect(size_t index)
 }
 void reshade::d3d12::runtime_d3d12::unload_effect(size_t index)
 {
-	// Wait for all GPU operations to finish so resources are no longer referenced
+	// Make sure no effect resources are currently in use
 	wait_for_command_queue();
 
 	for (technique &tech : _techniques)
@@ -886,7 +904,7 @@ void reshade::d3d12::runtime_d3d12::unload_effect(size_t index)
 }
 void reshade::d3d12::runtime_d3d12::unload_effects()
 {
-	// Wait for all GPU operations to finish so resources are no longer referenced
+	// Make sure no effect resources are currently in use
 	wait_for_command_queue();
 
 	for (technique &tech : _techniques)
@@ -1104,7 +1122,6 @@ void reshade::d3d12::runtime_d3d12::upload_texture(const texture &texture, const
 	generate_mipmaps(texture);
 
 	// Execute and wait for completion
-	execute_command_list();
 	wait_for_command_queue();
 }
 void reshade::d3d12::runtime_d3d12::destroy_texture(texture &texture)
@@ -1160,9 +1177,6 @@ void reshade::d3d12::runtime_d3d12::render_technique(technique &technique)
 	ID3D12DescriptorHeap *const descriptor_heaps[] = { effect_data.srv_heap.get(), effect_data.sampler_heap.get() };
 	_cmd_list->SetDescriptorHeaps(ARRAYSIZE(descriptor_heaps), descriptor_heaps);
 	_cmd_list->SetGraphicsRootSignature(effect_data.signature.get());
-
-	// Setup vertex input
-	_cmd_list->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
 
 	// Setup shader constants
 	if (effect_data.cb != nullptr)
@@ -1255,7 +1269,25 @@ void reshade::d3d12::runtime_d3d12::render_technique(technique &technique)
 		_cmd_list->RSSetViewports(1, &viewport);
 		_cmd_list->RSSetScissorRects(1, &scissor_rect);
 
-		// Draw triangle
+		// Draw primitives
+		switch (pass_info.topology)
+		{
+		case reshadefx::primitive_topology::point_list:
+			_cmd_list->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_POINTLIST);
+			break;
+		case reshadefx::primitive_topology::line_list:
+			_cmd_list->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_LINELIST);
+			break;
+		case reshadefx::primitive_topology::line_strip:
+			_cmd_list->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_LINESTRIP);
+			break;
+		case reshadefx::primitive_topology::triangle_list:
+			_cmd_list->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+			break;
+		case reshadefx::primitive_topology::triangle_strip:
+			_cmd_list->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLESTRIP);
+			break;
+		}
 		_cmd_list->DrawInstanced(pass_info.num_vertices, 1, 0, 0);
 
 		_vertices += pass_info.num_vertices;
@@ -1301,6 +1333,10 @@ void reshade::d3d12::runtime_d3d12::execute_command_list() const
 }
 bool reshade::d3d12::runtime_d3d12::wait_for_command_queue() const
 {
+	// Flush command list, to avoid it still referencing resources that may be destroyed after this call
+	if (_cmd_list_is_recording)
+		execute_command_list();
+
 	// Increment fence value to ensure it has not been signaled before
 	const UINT64 sync_value = _fence_value[_swap_index] + 1;
 	if (FAILED(_commandqueue->Signal(_fence[_swap_index].get(), sync_value)))
@@ -1628,15 +1664,15 @@ void reshade::d3d12::runtime_d3d12::draw_depth_debug_menu(buffer_detection_conte
 		runtime::save_config();
 }
 
-void reshade::d3d12::runtime_d3d12::update_depth_texture_bindings(com_ptr<ID3D12Resource> texture)
+void reshade::d3d12::runtime_d3d12::update_depth_texture_bindings(com_ptr<ID3D12Resource> depth_texture)
 {
 	if (_has_high_network_activity)
-		texture = nullptr; // Unbind texture
+		depth_texture.reset();
 
-	if (texture == _depth_texture)
+	if (depth_texture == _depth_texture)
 		return;
 
-	_depth_texture = std::move(texture);
+	_depth_texture = std::move(depth_texture);
 
 	D3D12_SHADER_RESOURCE_VIEW_DESC view_desc = {};
 

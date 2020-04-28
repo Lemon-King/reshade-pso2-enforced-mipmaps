@@ -1,4 +1,4 @@
-/**
+/*
  * Copyright (C) 2014 Patrick Mours. All rights reserved.
  * License: https://github.com/crosire/reshade#license
  */
@@ -37,8 +37,8 @@ namespace reshade
 
 		bool is_key_down(unsigned int keycode) const;
 		bool is_key_pressed(unsigned int keycode) const;
-		bool is_key_pressed(unsigned int keycode, bool ctrl, bool shift, bool alt) const;
-		bool is_key_pressed(const unsigned int key[4]) const { return is_key_pressed(key[0], key[1] != 0, key[2] != 0, key[3] != 0); }
+		bool is_key_pressed(unsigned int keycode, bool ctrl, bool shift, bool alt, bool force_modifiers = false) const;
+		bool is_key_pressed(const unsigned int key[4], bool force_modifiers = false) const { return is_key_pressed(key[0], key[1] != 0, key[2] != 0, key[3] != 0, force_modifiers); }
 		bool is_key_released(unsigned int keycode) const;
 		bool is_any_key_down() const;
 		bool is_any_key_pressed() const;
@@ -110,7 +110,6 @@ namespace reshade
 		bool _block_mouse = false;
 		bool _block_keyboard = false;
 		uint8_t _keys[256] = {};
-		uint8_t _mouse_buttons[5] = {};
 		unsigned int _keys_time[256] = {};
 		short _mouse_wheel_delta = 0;
 		unsigned int _mouse_position[2] = {};

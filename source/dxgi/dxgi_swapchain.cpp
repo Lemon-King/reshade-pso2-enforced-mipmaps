@@ -1,4 +1,4 @@
-/**
+/*
  * Copyright (C) 2014 Patrick Mours. All rights reserved.
  * License: https://github.com/crosire/reshade#license
  */
@@ -14,6 +14,8 @@
 #include "d3d12/d3d12_command_queue.hpp"
 #include "d3d12/runtime_d3d12.hpp"
 #include <algorithm>
+
+thread_local bool g_in_dxgi_runtime = false;
 
 DXGISwapChain::DXGISwapChain(D3D10Device *device, IDXGISwapChain  *original, const std::shared_ptr<reshade::runtime> &runtime) :
 	_orig(original),
@@ -58,6 +60,8 @@ DXGISwapChain::DXGISwapChain(D3D12Device *device, IDXGISwapChain3 *original, con
 
 void DXGISwapChain::runtime_reset()
 {
+	const std::lock_guard<std::mutex> lock(_runtime_mutex);
+
 	switch (_direct3d_version)
 	{
 	case 10:
@@ -78,6 +82,8 @@ void DXGISwapChain::runtime_resize()
 	if (FAILED(_orig->GetDesc(&desc)))
 		return;
 
+	const std::lock_guard<std::mutex> lock(_runtime_mutex);
+
 	bool initialized = false;
 	switch (_direct3d_version)
 	{
@@ -97,10 +103,14 @@ void DXGISwapChain::runtime_resize()
 }
 void DXGISwapChain::runtime_present(UINT flags)
 {
-	// Some D3D11 games test presentation for timing and composition purposes.
-	// These calls are not rendering related, but rather a status request for the D3D runtime and as such should be ignored.
+	// Some D3D11 games test presentation for timing and composition purposes
+	// These calls are not rendering related, but rather a status request for the D3D runtime and as such should be ignored
 	if (flags & DXGI_PRESENT_TEST)
 		return;
+
+	// Synchronize access to runtime to avoid race conditions between 'load_effects' and 'unload_effects' causing crashes
+	// This is necessary because Resident Evil 3 calls DXGI functions simultaneously from multiple threads (which is technically illegal)
+	const std::lock_guard<std::mutex> lock(_runtime_mutex);
 
 	switch (_direct3d_version)
 	{
@@ -278,7 +288,9 @@ HRESULT STDMETHODCALLTYPE DXGISwapChain::Present(UINT SyncInterval, UINT Flags)
 {
 	runtime_present(Flags);
 
+	g_in_dxgi_runtime = true;
 	const HRESULT hr = _orig->Present(SyncInterval, Flags);
+	g_in_dxgi_runtime = false;
 	handle_runtime_loss(hr);
 	return hr;
 }
@@ -370,7 +382,9 @@ HRESULT STDMETHODCALLTYPE DXGISwapChain::Present1(UINT SyncInterval, UINT Presen
 	runtime_present(PresentFlags);
 
 	assert(_interface_version >= 1);
+	g_in_dxgi_runtime = true;
 	const HRESULT hr = static_cast<IDXGISwapChain1 *>(_orig)->Present1(SyncInterval, PresentFlags, pPresentParameters);
+	g_in_dxgi_runtime = false;
 	handle_runtime_loss(hr);
 	return hr;
 }

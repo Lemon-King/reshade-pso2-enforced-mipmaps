@@ -1,4 +1,4 @@
-/**
+/*
  * Copyright (C) 2014 Patrick Mours. All rights reserved.
  * License: https://github.com/crosire/reshade#license
  */
@@ -407,7 +407,7 @@ next_token:
 	tok.literal_as_string.clear();
 
 	// Do a character type lookup for the current character
-	switch (type_lookup[static_cast<uint8_t>(*_cur)])
+	switch (type_lookup[uint8_t(*_cur)])
 	{
 	case 0xFF: // EOF
 		tok.id = tokenid::end_of_file;
@@ -516,7 +516,7 @@ next_token:
 			tok.id = tokenid::minus;
 		break;
 	case '.':
-		if (type_lookup[_cur[1]] == DIGIT)
+		if (type_lookup[uint8_t(_cur[1])] == DIGIT)
 			parse_numeric_literal(tok);
 		else if (_cur[1] == '.' && _cur[2] == '.')
 			tok.id = tokenid::ellipsis,
@@ -666,7 +666,7 @@ void reshadefx::lexer::skip(size_t length)
 void reshadefx::lexer::skip_space()
 {
 	// Skip each character until a space is found
-	while (type_lookup[*_cur] == SPACE && _cur < _end)
+	while (type_lookup[uint8_t(*_cur)] == SPACE && _cur < _end)
 		skip(1);
 }
 void reshadefx::lexer::skip_to_next_line()
@@ -681,7 +681,7 @@ void reshadefx::lexer::parse_identifier(token &tok) const
 	auto *const begin = _cur, *end = begin;
 
 	// Skip to the end of the identifier sequence
-	do end++; while (type_lookup[*end] == IDENT || type_lookup[*end] == DIGIT);
+	do end++; while (type_lookup[uint8_t(*end)] == IDENT || type_lookup[uint8_t(*end)] == DIGIT);
 
 	tok.id = tokenid::identifier;
 	tok.offset = begin - _input.data();
@@ -722,7 +722,7 @@ bool reshadefx::lexer::parse_pp_directive(token &tok)
 
 		skip_space();
 
-		// Check if this #line directive has an filename attached to it
+		// Check if this #line directive has an file name attached to it
 		if (_cur[0] == '"')
 		{
 			token temptok;
@@ -739,9 +739,9 @@ bool reshadefx::lexer::parse_pp_directive(token &tok)
 
 	return true;
 }
-void reshadefx::lexer::parse_string_literal(token &tok, bool escape) const
+void reshadefx::lexer::parse_string_literal(token &tok, bool escape)
 {
-	auto *const begin = _cur, *end = begin + 1;
+	auto *const begin = _cur, *end = begin + 1; // Skip first quote character right away
 
 	for (auto c = *end; c != '"'; c = *++end)
 	{
@@ -749,12 +749,22 @@ void reshadefx::lexer::parse_string_literal(token &tok, bool escape) const
 		{
 			// Line feed reached, the string literal is done (technically this should be an error, but the lexer does not report errors, so ignore it)
 			end--;
+			if (end[0] == '\r') end--;
 			break;
 		}
-		if (c == '\\' && end[1] == '\n')
+
+		if (c == '\r')
+		{
+			// Silently ignore carriage return characters
+			continue;
+		}
+
+		if (unsigned int n = (end[1] == '\r' && end + 2 < _end) ? 2 : 1;
+			c == '\\' && end[n] == '\n')
 		{
 			// Escape character found at end of line, the string literal continues on to the next line
-			end++;
+			end += n;
+			_cur_location.line++;
 			continue;
 		}
 

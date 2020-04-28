@@ -1,4 +1,4 @@
-/**
+/*
  * Copyright (C) 2014 Patrick Mours. All rights reserved.
  * License: https://github.com/crosire/reshade#license
  */
@@ -113,6 +113,18 @@ namespace reshadefx
 		greater,
 		greater_equal,
 		always,
+	};
+
+	/// <summary>
+	/// Specifies the possible primitives.
+	/// </summary>
+	enum class primitive_topology : uint8_t
+	{
+		point_list = 1,
+		line_list,
+		line_strip,
+		triangle_list,
+		triangle_strip,
 	};
 
 	/// <summary>
@@ -248,6 +260,7 @@ namespace reshadefx
 		pass_stencil_op stencil_op_fail = pass_stencil_op::keep;
 		pass_stencil_op stencil_op_depth_fail = pass_stencil_op::keep;
 		uint32_t num_vertices = 3;
+		primitive_topology topology = primitive_topology::triangle_list;
 		uint32_t viewport_width = 0;
 		uint32_t viewport_height = 0;
 	};

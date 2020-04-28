@@ -30,6 +30,7 @@
     <UseVSHostingProcess>true</UseVSHostingProcess>
     <Prefer32Bit>false</Prefer32Bit>
     <LangVersion>7.3</LangVersion>
+    <NoWarn>1633</NoWarn>
   </PropertyGroup>
   <PropertyGroup Condition=" '$(Configuration)|$(Platform)' == 'Release|AnyCPU' ">
     <PlatformTarget>AnyCPU</PlatformTarget>
@@ -39,6 +40,7 @@
     <UseVSHostingProcess>false</UseVSHostingProcess>
     <Prefer32Bit>false</Prefer32Bit>
     <LangVersion>7.3</LangVersion>
+    <NoWarn>1633</NoWarn>
   </PropertyGroup>
   <ItemGroup>
     <Reference Include="PresentationCore" />
@@ -57,8 +59,8 @@
       <Generator>MSBuild:Compile</Generator>
       <SubType>Designer</SubType>
     </ApplicationDefinition>
+    <Compile Include="Utilities\AeroGlass.cs" />
     <Compile Include="Utilities\FileOpenDialog.cs" />
-    <Compile Include="Utilities\Glass.cs" />
     <Compile Include="Utilities\IniFile.cs" />
     <Compile Include="Utilities\PEInfo.cs" />
     <Page Include="Dialogs\SelectApp.xaml">
@@ -75,12 +77,19 @@
     <Compile Include="Dialogs\SelectEffects.xaml.cs">
       <DependentUpon>SelectEffects.xaml</DependentUpon>
     </Compile>
-    <Page Include="Dialogs\SettingsDialog.xaml">
+    <Page Include="Dialogs\SelectPackages.xaml">
       <SubType>Designer</SubType>
       <Generator>MSBuild:Compile</Generator>
     </Page>
-    <Compile Include="Dialogs\SettingsDialog.xaml.cs">
-      <DependentUpon>SettingsDialog.xaml</DependentUpon>
+    <Compile Include="Dialogs\SelectPackages.xaml.cs">
+      <DependentUpon>SelectPackages.xaml</DependentUpon>
+    </Compile>
+    <Page Include="Dialogs\Settings.xaml">
+      <SubType>Designer</SubType>
+      <Generator>MSBuild:Compile</Generator>
+    </Page>
+    <Compile Include="Dialogs\Settings.xaml.cs">
+      <DependentUpon>Settings.xaml</DependentUpon>
     </Compile>
     <Page Include="MainWindow.xaml">
       <SubType>Designer</SubType>
@@ -103,22 +112,28 @@
     <None Include="Properties\Assembly.manifest">
       <SubType>Designer</SubType>
     </None>
+    <None Include="Properties\AssemblyInfo.cs.in" />
+    <EmbeddedResource Condition="Exists('Compatibility.ini')" Include="Compatibility.ini" />
+    <EmbeddedResource Condition="Exists('EffectPackages.ini')" Include="EffectPackages.ini" />
   </ItemGroup>
   <ItemGroup>
     <Content Include="Properties\Icon.ico" />
   </ItemGroup>
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.Common.props" />
   <Import Project="$(MSBuildToolsPath)\Microsoft.CSharp.targets" />
   <PropertyGroup>
-    <PostBuildEvent>
-echo Compressing ReShade DLLs ...
-"$(SolutionDir)tools\7za" a -y "$(TargetDir)ReShade.zip" "$(SolutionDir)bin\Win32\Release\ReShade32.dll" "$(SolutionDir)res\layers\ReShade32.json" "$(SolutionDir)bin\x64\Release\ReShade64.dll" "$(SolutionDir)res\layers\ReShade64.json"
+    <PreBuildEvent>echo Generating assembly version ...
+"$(VC_ExecutablePath_x86)\cl.exe" /nologo /EP /C /I $(SolutionDir)res $(ProjectDir)Properties\AssemblyInfo.cs.in &gt; $(ProjectDir)Properties\AssemblyInfo.cs
+
+echo Compiling ReShade setup tool ...</PreBuildEvent>
+    <PostBuildEvent>echo Compressing ReShade DLLs ...
+"$(SolutionDir)tools\7za.exe" a -y "$(TargetDir)ReShade Setup.zip" "$(SolutionDir)bin\Win32\Release\ReShade32.dll" "$(SolutionDir)res\layers\ReShade32.json" "$(SolutionDir)bin\x64\Release\ReShade64.dll" "$(SolutionDir)res\layers\ReShade64.json" &gt; nul
 
 echo Appending archive to setup executable ...
-copy /b "$(TargetPath)" + "$(TargetDir)ReShade.zip" "$(TargetPath)"
+copy /b "$(TargetPath)" + "$(TargetDir)ReShade Setup.zip" "$(TargetPath)"
 
 echo Cleaning up and deleting temporary archive ...
-del "$(TargetDir)ReShade.zip"
-    </PostBuildEvent>
+del "$(TargetDir)ReShade Setup.zip"</PostBuildEvent>
     <RunPostBuildEvent>OnBuildSuccess</RunPostBuildEvent>
   </PropertyGroup>
 </Project>

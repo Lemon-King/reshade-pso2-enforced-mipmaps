@@ -1,13 +1,13 @@
-﻿/**
+﻿/*
  * Copyright (C) 2014 Patrick Mours. All rights reserved.
  * License: https://github.com/crosire/reshade#license
  */
 
-using ReShade.Utilities;
+using ReShade.Setup.Utilities;
 using System.IO;
 using System.Windows;
 
-namespace ReShade.Setup
+namespace ReShade.Setup.Dialogs
 {
 	public partial class SettingsDialog
 	{
@@ -37,7 +37,7 @@ namespace ReShade.Setup
 			var skipTut = SkipTut.IsChecked;
 			iniFile.SetValue("GENERAL", "TutorialProgress", skipTut.HasValue ? (skipTut.Value ? "4" : "0") : iniFile.GetString("GENERAL", "TutorialProgress", "0"));
 
-			iniFile.Save();
+			iniFile.SaveFile();
 
 			DialogResult = true;
 		}

@@ -1,4 +1,4 @@
-/**
+/*
  * Copyright (C) 2014 Patrick Mours. All rights reserved.
  * License: https://github.com/crosire/reshade#license
  */
@@ -50,7 +50,7 @@ namespace reshadefx
 		/// <param name="name">The name of the macro to define.</param>
 		/// <param name="value">The value to define that macro to.</param>
 		/// <returns></returns>
-		bool add_macro_definition(const std::string &name, std::string value = "1") { return add_macro_definition(name, macro { std::move(value) }); }
+		bool add_macro_definition(const std::string &name, std::string value = "1") { return add_macro_definition(name, macro { std::move(value), {} }); }
 
 		/// <summary>
 		/// Open the specified file, parse its contents and append them to the output.
@@ -92,7 +92,7 @@ namespace reshadefx
 		{
 			bool value;
 			bool skipping;
-			reshadefx::token token;
+			token pp_token;
 			size_t input_index;
 		};
 		struct input_level
@@ -147,6 +147,6 @@ namespace reshadefx
 		std::unordered_set<std::string> _used_macros;
 		std::unordered_map<std::string, macro> _macros;
 		std::vector<std::filesystem::path> _include_paths;
-		std::unordered_map<std::string, std::string> _filecache;
+		std::unordered_map<std::string, std::string> _file_cache;
 	};
 }

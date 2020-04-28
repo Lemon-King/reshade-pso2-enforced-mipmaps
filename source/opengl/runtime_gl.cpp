@@ -1,4 +1,4 @@
-/**
+/*
  * Copyright (C) 2014 Patrick Mours. All rights reserved.
  * License: https://github.com/crosire/reshade#license
  */
@@ -44,11 +44,6 @@ namespace reshade::opengl
 
 	struct opengl_technique_data
 	{
-		~opengl_technique_data()
-		{
-			glDeleteQueries(1, &query);
-		}
-
 		GLuint query = 0;
 		bool query_in_flight = false;
 		std::vector<opengl_pass_data> passes;
@@ -350,7 +345,7 @@ bool reshade::opengl::runtime_gl::init_effect(size_t index)
 	std::unordered_map<std::string, GLuint> entry_points;
 
 	// Compile all entry points
-	for (const auto &entry_point : effect.module.entry_points)
+	for (const reshadefx::entry_point &entry_point : effect.module.entry_points)
 	{
 		GLuint shader_id = glCreateShader(entry_point.is_pixel_shader ? GL_FRAGMENT_SHADER : GL_VERTEX_SHADER);
 		entry_points[entry_point.name] = shader_id;
@@ -688,6 +683,8 @@ void reshade::opengl::runtime_gl::unload_effect(size_t index)
 		if (impl == nullptr)
 			continue;
 
+		glDeleteQueries(1, &impl->query);
+
 		for (opengl_pass_data &pass_data : impl->passes)
 		{
 			if (pass_data.program)
@@ -714,6 +711,8 @@ void reshade::opengl::runtime_gl::unload_effects()
 		const auto impl = static_cast<opengl_technique_data *>(tech.impl);
 		if (impl == nullptr)
 			continue;
+
+		glDeleteQueries(1, &impl->query);
 
 		for (opengl_pass_data &pass_data : impl->passes)
 		{
@@ -1048,7 +1047,25 @@ void reshade::opengl::runtime_gl::render_technique(technique &technique)
 			}
 		}
 
-		glDrawArrays(GL_TRIANGLES, 0, pass_info.num_vertices);
+		// Draw primitives
+		switch (pass_info.topology)
+		{
+		case reshadefx::primitive_topology::point_list:
+			glDrawArrays(GL_POINTS, 0, pass_info.num_vertices);
+			break;
+		case reshadefx::primitive_topology::line_list:
+			glDrawArrays(GL_LINES, 0, pass_info.num_vertices);
+			break;
+		case reshadefx::primitive_topology::line_strip:
+			glDrawArrays(GL_LINE_STRIP, 0, pass_info.num_vertices);
+			break;
+		case reshadefx::primitive_topology::triangle_list:
+			glDrawArrays(GL_TRIANGLES, 0, pass_info.num_vertices);
+			break;
+		case reshadefx::primitive_topology::triangle_strip:
+			glDrawArrays(GL_TRIANGLE_STRIP, 0, pass_info.num_vertices);
+			break;
+		}
 
 		_vertices += pass_info.num_vertices;
 		_drawcalls += 1;
@@ -1365,7 +1382,7 @@ void reshade::opengl::runtime_gl::update_depth_texture_bindings(buffer_detection
 	}
 
 	// Update all references to the new texture
-	for (const auto &tex : _textures)
+	for (const texture &tex : _textures)
 	{
 		if (tex.impl == nullptr ||
 			tex.impl_reference != texture_reference::depth_buffer)

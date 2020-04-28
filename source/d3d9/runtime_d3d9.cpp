@@ -1,4 +1,4 @@
-/**
+/*
  * Copyright (C) 2014 Patrick Mours. All rights reserved.
  * License: https://github.com/crosire/reshade#license
  */
@@ -224,7 +224,8 @@ void reshade::d3d9::runtime_d3d9::on_present()
 	_drawcalls = _buffer_detection->total_drawcalls();
 
 #if RESHADE_DEPTH
-	_buffer_detection->disable_intz = _disable_intz;
+	// Disable INTZ replacement while high network activity is detected, since the option is not available in the UI then, but artifacts may occur without it
+	_buffer_detection->disable_intz = _disable_intz || _has_high_network_activity;
 
 	assert(_depth_clear_index_override != 0);
 	update_depth_texture_bindings(_has_high_network_activity ? nullptr :
@@ -303,7 +304,8 @@ bool reshade::d3d9::runtime_d3d9::capture_screenshot(uint8_t *buffer) const
 			for (uint32_t x = 0; x < pitch; x += 4)
 			{
 				buffer[x + 3] = 0xFF; // Clear alpha channel
-				if (_backbuffer_format == D3DFMT_A8R8G8B8 || _backbuffer_format == D3DFMT_X8R8G8B8)
+				if (_backbuffer_format == D3DFMT_A8R8G8B8 ||
+					_backbuffer_format == D3DFMT_X8R8G8B8)
 					std::swap(buffer[x + 0], buffer[x + 2]); // Format is BGRA, but output should be RGBA, so flip channels
 			}
 		}
@@ -333,10 +335,11 @@ bool reshade::d3d9::runtime_d3d9::init_effect(size_t index)
 	const auto D3DDisassemble = reinterpret_cast<pD3DDisassemble>(GetProcAddress(_d3d_compiler, "D3DDisassemble"));
 
 	// Add specialization constant defines to source code
-	effect.preamble += "#define COLOR_PIXEL_SIZE 1.0 / " + std::to_string(_width) + ", 1.0 / " + std::to_string(_height) + "\n"
+	effect.preamble +=
+		"#define COLOR_PIXEL_SIZE 1.0 / " + std::to_string(_width) + ", 1.0 / " + std::to_string(_height) + "\n"
 		"#define DEPTH_PIXEL_SIZE COLOR_PIXEL_SIZE\n"
-		"#define SV_TARGET_PIXEL_SIZE COLOR_PIXEL_SIZE\n"
-		"#define SV_DEPTH_PIXEL_SIZE COLOR_PIXEL_SIZE\n";
+		"#define SV_DEPTH_PIXEL_SIZE DEPTH_PIXEL_SIZE\n"
+		"#define SV_TARGET_PIXEL_SIZE COLOR_PIXEL_SIZE\n";
 
 	const std::string hlsl_vs = effect.preamble + effect.module.hlsl;
 	const std::string hlsl_ps = effect.preamble + "#define POSITION VPOS\n" + effect.module.hlsl;
@@ -344,7 +347,7 @@ bool reshade::d3d9::runtime_d3d9::init_effect(size_t index)
 	std::unordered_map<std::string, com_ptr<IUnknown>> entry_points;
 
 	// Compile the generated HLSL source code to DX byte code
-	for (const auto &entry_point : effect.module.entry_points)
+	for (const reshadefx::entry_point &entry_point : effect.module.entry_points)
 	{
 		com_ptr<ID3DBlob> compiled, d3d_errors;
 		const std::string &hlsl = entry_point.is_pixel_shader ? hlsl_ps : hlsl_vs;
@@ -915,11 +918,25 @@ void reshade::d3d9::runtime_d3d9::render_technique(technique &technique)
 		};
 		_device->SetVertexShaderConstantF(255, texel_size, 1);
 
-		// Draw triangle
-		if (pass_info.num_vertices % 3)
+		// Draw primitives
+		switch (pass_info.topology)
+		{
+		case reshadefx::primitive_topology::point_list:
 			_device->DrawPrimitive(D3DPT_POINTLIST, 0, pass_info.num_vertices);
-		else
+			break;
+		case reshadefx::primitive_topology::line_list:
+			_device->DrawPrimitive(D3DPT_LINELIST, 0, pass_info.num_vertices / 2);
+			break;
+		case reshadefx::primitive_topology::line_strip:
+			_device->DrawPrimitive(D3DPT_LINESTRIP, 0, pass_info.num_vertices - 1);
+			break;
+		case reshadefx::primitive_topology::triangle_list:
 			_device->DrawPrimitive(D3DPT_TRIANGLELIST, 0, pass_info.num_vertices / 3);
+			break;
+		case reshadefx::primitive_topology::triangle_strip:
+			_device->DrawPrimitive(D3DPT_TRIANGLESTRIP, 0, pass_info.num_vertices - 2);
+			break;
+		}
 
 		_vertices += pass_info.num_vertices;
 		_drawcalls += 1;
@@ -1055,7 +1072,7 @@ void reshade::d3d9::runtime_d3d9::render_imgui_draw_data(ImDrawData *draw_data)
 				vtx_dst->y = vtx.pos.y;
 				vtx_dst->z = 0.0f;
 
-				// RGBA --> ARGB for Direct3D 9
+				// RGBA --> ARGB
 				vtx_dst->col = (vtx.col & 0xFF00FF00) | ((vtx.col & 0xFF0000) >> 16) | ((vtx.col & 0xFF) << 16);
 
 				vtx_dst->u = vtx.uv.x;
@@ -1143,7 +1160,7 @@ void reshade::d3d9::runtime_d3d9::draw_depth_debug_menu(buffer_detection &tracke
 
 	assert(!_reset_buffer_detection);
 
-	// Do NOT reset tracker within state block capture scope, since it may otherwise bind the replacement depth-stencil after it has been destroyed here
+	// Do NOT reset tracker within state block capture scope, since the state block may otherwise bind the replacement depth-stencil after it has been destroyed during that reset
 	_reset_buffer_detection |= ImGui::Checkbox("Disable replacement with INTZ format", &_disable_intz);
 
 	_reset_buffer_detection |= ImGui::Checkbox("Use aspect ratio heuristics", &_filter_aspect_ratio);
@@ -1211,13 +1228,16 @@ void reshade::d3d9::runtime_d3d9::draw_depth_debug_menu(buffer_detection &tracke
 		runtime::save_config();
 }
 
-void reshade::d3d9::runtime_d3d9::update_depth_texture_bindings(com_ptr<IDirect3DSurface9> surface)
+void reshade::d3d9::runtime_d3d9::update_depth_texture_bindings(com_ptr<IDirect3DSurface9> depth_surface)
 {
-	if (surface == _depth_surface)
+	if (_has_high_network_activity)
+		depth_surface.reset();
+
+	if (depth_surface == _depth_surface)
 		return;
 
 	_depth_texture.reset();
-	_depth_surface = std::move(surface);
+	_depth_surface = std::move(depth_surface);
 	_has_depth_texture = false;
 
 	if (_depth_surface != nullptr)
@@ -1233,7 +1253,7 @@ void reshade::d3d9::runtime_d3d9::update_depth_texture_bindings(com_ptr<IDirect3
 	}
 
 	// Update all references to the new texture
-	for (const auto &tex : _textures)
+	for (const texture &tex : _textures)
 	{
 		if (tex.impl == nullptr ||
 			tex.impl_reference != texture_reference::depth_buffer)

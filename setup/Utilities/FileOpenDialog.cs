@@ -3,7 +3,7 @@ using System.Runtime.InteropServices;
 using System.Windows;
 using System.Windows.Interop;
 
-namespace ReShade.Utilities
+namespace ReShade.Setup.Utilities
 {
 	public class FileOpenDialog
 	{
@@ -179,8 +179,8 @@ namespace ReShade.Utilities
 		{
 			get
 			{
-				dialog.GetFileName(out string result);
-				return result;
+				var fileNames = FileNames;
+				return fileNames.Length != 0 ? fileNames[0] : null;
 			}
 			set
 			{

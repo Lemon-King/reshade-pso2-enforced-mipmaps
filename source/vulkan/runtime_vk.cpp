@@ -1,4 +1,4 @@
-/**
+/*
  * Copyright (C) 2014 Patrick Mours. All rights reserved.
  * License: https://github.com/crosire/reshade#license
  */
@@ -8,7 +8,6 @@
 #include "runtime_vk.hpp"
 #include "runtime_config.hpp"
 #include "runtime_objects.hpp"
-#include "driver_bugs.hpp"
 #include "format_utils.hpp"
 #include <imgui.h>
 #include <imgui_internal.h>
@@ -75,10 +74,10 @@ namespace reshade::vulkan
 			case VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL:
 			case VK_IMAGE_LAYOUT_DEPTH_READ_ONLY_STENCIL_ATTACHMENT_OPTIMAL:
 			case VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_STENCIL_READ_ONLY_OPTIMAL:
-				return VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
+				return VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_READ_BIT | VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
 			case VK_IMAGE_LAYOUT_PRESENT_SRC_KHR:
 			case VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL:
-				return VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+				return VK_ACCESS_COLOR_ATTACHMENT_READ_BIT | VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
 			}
 			return 0;
 		};
@@ -89,12 +88,13 @@ namespace reshade::vulkan
 			case VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL:
 				return VK_PIPELINE_STAGE_TRANSFER_BIT;
 			case VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL:
-				return VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT;
+				return VK_PIPELINE_STAGE_VERTEX_SHADER_BIT | VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT;
 			case VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL:
 			case VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL:
 			case VK_IMAGE_LAYOUT_DEPTH_READ_ONLY_STENCIL_ATTACHMENT_OPTIMAL:
 			case VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_STENCIL_READ_ONLY_OPTIMAL:
-				return VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT;
+				return VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT | VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT;
+			case VK_IMAGE_LAYOUT_PRESENT_SRC_KHR: // Can use color attachment output here, since the semaphores wait on that stage
 			case VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL:
 				return VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
 			}
@@ -118,10 +118,12 @@ namespace reshade::vulkan
 reshade::vulkan::runtime_vk::runtime_vk(VkDevice device, VkPhysicalDevice physical_device, uint32_t queue_family_index, const VkLayerInstanceDispatchTable &instance_table, const VkLayerDispatchTable &device_table) :
 	_device(device), _queue_family_index(queue_family_index), vk(device_table)
 {
-	_renderer_id = 0x20000;
-
 	instance_table.GetPhysicalDeviceProperties(physical_device, &_device_props);
 	instance_table.GetPhysicalDeviceMemoryProperties(physical_device, &_memory_props);
+
+	_renderer_id = 0x20000 |
+		VK_VERSION_MAJOR(_device_props.apiVersion) << 12 |
+		VK_VERSION_MINOR(_device_props.apiVersion) <<  8;
 
 	_vendor_id = _device_props.vendorID;
 	_device_id = _device_props.deviceID;
@@ -181,6 +183,7 @@ reshade::vulkan::runtime_vk::runtime_vk(VkDevice device, VkPhysicalDevice physic
 		create_info.flags = VMA_ALLOCATOR_CREATE_EXTERNALLY_SYNCHRONIZED_BIT;
 		create_info.physicalDevice = physical_device;
 		create_info.device = _device;
+		create_info.preferredLargeHeapBlockSize = 1920 * 1080 * 4 * 16; // Allocate blocks of memory that can comfortably contain 16 Full HD images
 		create_info.pVulkanFunctions = &functions;
 		create_info.vulkanApiVersion = VK_API_VERSION_1_1; // Vulkan 1.1 is guaranteed by code in vulkan_hooks.cpp
 
@@ -191,7 +194,11 @@ reshade::vulkan::runtime_vk::runtime_vk(VkDevice device, VkPhysicalDevice physic
 	subscribe_to_ui("Vulkan", [this]() {
 		// Add some information about the device and driver to the UI
 		ImGui::Text("Vulkan %u.%u.%u", VK_VERSION_MAJOR(_device_props.apiVersion), VK_VERSION_MINOR(_device_props.apiVersion), VK_VERSION_PATCH(_device_props.apiVersion));
-		ImGui::Text("%s Driver %u.%u", _device_props.deviceName, VK_VERSION_MAJOR(_device_props.driverVersion), VK_VERSION_MINOR(_device_props.driverVersion));
+		ImGui::Text("%s Driver %u.%u",
+			_device_props.deviceName,
+			VK_VERSION_MAJOR(_device_props.driverVersion),
+			// NVIDIA has a custom driver version scheme, so extract the proper minor version from it
+			_device_props.vendorID == 0x10DE ? (_device_props.driverVersion >> 14) & 0xFF : VK_VERSION_MINOR(_device_props.driverVersion));
 
 #if RESHADE_DEPTH
 		ImGui::Spacing();
@@ -245,6 +252,18 @@ bool reshade::vulkan::runtime_vk::on_init(VkSwapchainKHR swapchain, const VkSwap
 	if (_backbuffer_image_view[1] == VK_NULL_HANDLE)
 		return false;
 
+#ifndef NDEBUG
+	if (vk.DebugMarkerSetObjectNameEXT != nullptr)
+	{
+		VkDebugMarkerObjectNameInfoEXT name_info { VK_STRUCTURE_TYPE_DEBUG_MARKER_OBJECT_NAME_INFO_EXT };
+		name_info.object = (uint64_t)_backbuffer_image;
+		name_info.objectType = VK_DEBUG_REPORT_OBJECT_TYPE_IMAGE_EXT;
+		name_info.pObjectName = "ReShade back buffer";
+
+		vk.DebugMarkerSetObjectNameEXT(_device, &name_info);
+	}
+#endif
+
 	// Create effect depth-stencil resource
 	assert(_effect_stencil_format != VK_FORMAT_UNDEFINED);
 	_effect_stencil = create_image(
@@ -256,6 +275,18 @@ bool reshade::vulkan::runtime_vk::on_init(VkSwapchainKHR swapchain, const VkSwap
 	if (_effect_stencil_view == VK_NULL_HANDLE)
 		return false;
 
+#ifndef NDEBUG
+	if (vk.DebugMarkerSetObjectNameEXT != nullptr)
+	{
+		VkDebugMarkerObjectNameInfoEXT name_info{ VK_STRUCTURE_TYPE_DEBUG_MARKER_OBJECT_NAME_INFO_EXT };
+		name_info.object = (uint64_t)_effect_stencil;
+		name_info.objectType = VK_DEBUG_REPORT_OBJECT_TYPE_IMAGE_EXT;
+		name_info.pObjectName = "ReShade stencil buffer";
+
+		vk.DebugMarkerSetObjectNameEXT(_device, &name_info);
+	}
+#endif
+
 	// Create default render pass
 	for (uint32_t k = 0; k < 2; ++k)
 	{
@@ -264,6 +295,7 @@ bool reshade::vulkan::runtime_vk::on_init(VkSwapchainKHR swapchain, const VkSwap
 		attachment_refs[0].layout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
 		attachment_refs[1].attachment = 1;
 		attachment_refs[1].layout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
+
 		VkAttachmentDescription attachment_descs[2] = {};
 		attachment_descs[0].format = k == 0 ? make_format_normal(_backbuffer_format) : make_format_srgb(_backbuffer_format);
 		attachment_descs[0].samples = VK_SAMPLE_COUNT_1_BIT;
@@ -285,10 +317,11 @@ bool reshade::vulkan::runtime_vk::on_init(VkSwapchainKHR swapchain, const VkSwap
 		VkSubpassDependency subdep = {};
 		subdep.srcSubpass = VK_SUBPASS_EXTERNAL;
 		subdep.dstSubpass = 0;
-		subdep.srcStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
-		subdep.dstStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT | VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT;
-		subdep.srcAccessMask = 0;
-		subdep.dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+		subdep.srcStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT | VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT;
+		subdep.dstStageMask = VK_PIPELINE_STAGE_ALL_GRAPHICS_BIT;
+		subdep.srcAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT | VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
+		subdep.dstAccessMask = VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_COLOR_ATTACHMENT_READ_BIT | VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT | VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_READ_BIT | VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
+
 		VkSubpassDescription subpass = {};
 		subpass.pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS;
 		subpass.colorAttachmentCount = 1;
@@ -377,7 +410,10 @@ bool reshade::vulkan::runtime_vk::on_init(VkSwapchainKHR swapchain, const VkSwap
 
 		VkSemaphoreCreateInfo sem_create_info { VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO };
 
-		check_result(vk.CreateSemaphore(_device, &sem_create_info, nullptr, &_cmd_semaphores[i])) false;
+		for (uint32_t k = 0; k < 2; ++k)
+		{
+			check_result(vk.CreateSemaphore(_device, &sem_create_info, nullptr, &_cmd_semaphores[i + k * NUM_COMMAND_FRAMES])) false;
+		}
 	}
 
 	// Create special fence for synchronous execution (see 'execute_command_buffer'), which is not signaled by default
@@ -437,7 +473,8 @@ void reshade::vulkan::runtime_vk::on_reset()
 {
 	runtime::on_reset();
 
-	wait_for_command_buffers(); // Make sure none of the resources below are currently in use
+	// Make sure none of the resources below are currently in use
+	wait_for_command_buffers();
 
 	for (VkImageView view : _swapchain_views)
 		vk.DestroyImageView(_device, view, nullptr);
@@ -453,6 +490,9 @@ void reshade::vulkan::runtime_vk::on_reset()
 	for (VkSemaphore &semaphore : _cmd_semaphores)
 		vk.DestroySemaphore(_device, semaphore, nullptr),
 		semaphore = VK_NULL_HANDLE;
+
+	assert(_wait_stages.empty());
+	assert(_wait_semaphores.empty());
 
 	VkCommandBuffer cmd_buffers[NUM_COMMAND_FRAMES] = {};
 	for (uint32_t i = 0; i < NUM_COMMAND_FRAMES; ++i)
@@ -528,7 +568,7 @@ void reshade::vulkan::runtime_vk::on_reset()
 	_allocations.clear();
 }
 
-void reshade::vulkan::runtime_vk::on_present(uint32_t swapchain_image_index, const VkSemaphore *wait, uint32_t num_wait, VkSemaphore &signal)
+void reshade::vulkan::runtime_vk::on_present(VkQueue queue, uint32_t swapchain_image_index, const std::vector<VkSemaphore> &wait, VkSemaphore &signal)
 {
 	if (!_is_initialized)
 		return;
@@ -540,6 +580,9 @@ void reshade::vulkan::runtime_vk::on_present(uint32_t swapchain_image_index, con
 	_cmd_index = _framecount % NUM_COMMAND_FRAMES;
 	_swap_index = swapchain_image_index;
 
+	_wait_stages.resize(wait.size(), VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT);
+	_wait_semaphores.assign(wait.begin(), wait.end());
+
 	// Make sure the command buffer has finished executing before reusing it this frame
 	const VkFence fence = _cmd_fences[_cmd_index];
 	if (vk.GetFenceStatus(_device, fence) == VK_INCOMPLETE)
@@ -548,12 +591,11 @@ void reshade::vulkan::runtime_vk::on_present(uint32_t swapchain_image_index, con
 	}
 
 #if RESHADE_DEPTH
-	update_depth_image_bindings(_has_high_network_activity ? buffer_detection::depthstencil_info { VK_NULL_HANDLE } :
+	update_depth_image_bindings(_has_high_network_activity ? buffer_detection::depthstencil_info {} :
 		_buffer_detection->find_best_depth_texture(_use_aspect_ratio_heuristics ? VkExtent2D { _width, _height } : VkExtent2D { 0, 0 }, _depth_image_override));
 #endif
 
 	update_and_render_effects();
-
 	runtime::on_present();
 
 	// Submit all asynchronous commands in one batch to the current queue
@@ -565,21 +607,29 @@ void reshade::vulkan::runtime_vk::on_present(uint32_t swapchain_image_index, con
 		signal = _cmd_semaphores[_cmd_index];
 
 		VkSubmitInfo submit_info { VK_STRUCTURE_TYPE_SUBMIT_INFO };
+
+		// If the application is presenting with a different queue than rendering, synchronize these two queues first
+		// This ensures that it has finished rendering before ReShade applies its own rendering
+		if (queue != _queue)
+		{
+			// Signal a semaphore from the queue the application is presenting with
+			submit_info.signalSemaphoreCount = 1;
+			submit_info.pSignalSemaphores = &_cmd_semaphores[NUM_COMMAND_FRAMES + _cmd_index];
+
+			vk.QueueSubmit(queue, 1, &submit_info, VK_NULL_HANDLE);
+
+			// Wait on that semaphore in the ReShade submit
+			_wait_stages.push_back(VK_PIPELINE_STAGE_ALL_COMMANDS_BIT);
+			_wait_semaphores.push_back(submit_info.pSignalSemaphores[0]);
+		}
+
+		submit_info.waitSemaphoreCount = static_cast<uint32_t>(_wait_semaphores.size());
+		submit_info.pWaitSemaphores = _wait_semaphores.data();
+		submit_info.pWaitDstStageMask = _wait_stages.data();
 		submit_info.commandBufferCount = 1;
 		submit_info.pCommandBuffers = &cmd_info.first;
-
-		std::vector<VkPipelineStageFlags> wait_stages(num_wait, VK_PIPELINE_STAGE_ALL_GRAPHICS_BIT);
-		if (wait != nullptr)
-		{
-			submit_info.waitSemaphoreCount = num_wait;
-			submit_info.pWaitSemaphores = wait;
-			submit_info.pWaitDstStageMask = wait_stages.data();
-		}
-		if (signal != VK_NULL_HANDLE)
-		{
-			submit_info.signalSemaphoreCount = 1;
-			submit_info.pSignalSemaphores = &signal;
-		}
+		submit_info.signalSemaphoreCount = 1;
+		submit_info.pSignalSemaphores = &signal;
 
 		// Only reset fence before an actual submit which can signal it again
 		vk.ResetFences(_device, 1, &fence);
@@ -592,6 +642,9 @@ void reshade::vulkan::runtime_vk::on_present(uint32_t swapchain_image_index, con
 		// Command buffer is now in invalid state and ready for a reset
 		cmd_info.second = false;
 	}
+
+	_wait_stages.clear();
+	_wait_semaphores.clear();
 }
 
 bool reshade::vulkan::runtime_vk::capture_screenshot(uint8_t *buffer) const
@@ -688,11 +741,10 @@ bool reshade::vulkan::runtime_vk::init_effect(size_t index)
 
 	{   VkResult res = VK_SUCCESS;
 
-		/* The AMD Vulkan driver has issues with multiple entry points in a single shader module, so
-		 * instead create a separate shader module for every entry point there.
-		 * See also driver_bugs.hpp for a more detailed description of the problem.
-		 */
-		bool has_driver_bug = (_device_props.vendorID == 0x1002 /*AMD*/);
+		// The AMD driver has a really hard time with SPIR-V modules that have multiple entry points.
+		// Trying to create a graphics pipeline using a shader module created from such a SPIR-V module tends to just fail with a generic VK_ERROR_OUT_OF_HOST_MEMORY.
+		// This is a pretty unpleasant driver bug, but until fixed, create a separate shader module for every entry point and rewrite the SPIR-V module for each to removes all but a single entry point (and associated functions/variables).
+		bool has_driver_bug = (_device_props.vendorID == 0x1002); // AMD
 
 		if (!has_driver_bug)
 		{
@@ -709,8 +761,73 @@ bool reshade::vulkan::runtime_vk::init_effect(size_t index)
 
 			if (has_driver_bug)
 			{
+				uint32_t current_function = 0, current_function_offset = 0;
 				std::vector<uint32_t> spirv = effect.module.spirv;
-				work_around_amd_driver_bug(spirv, entry_point.name);
+				std::vector<uint32_t> functions_to_remove, variables_to_remove;
+
+				for (uint32_t inst = 5 /* Skip SPIR-V header information */; inst < spirv.size();)
+				{
+					const uint32_t op = spirv[inst] & 0xFFFF;
+					const uint32_t len = (spirv[inst] >> 16) & 0xFFFF;
+					assert(len != 0);
+
+					switch (op)
+					{
+					case 15: // OpEntryPoint
+						// Look for any non-matching entry points
+						if (entry_point.name != reinterpret_cast<const char *>(&spirv[inst + 3]))
+						{
+							functions_to_remove.push_back(spirv[inst + 2]);
+
+							// Get interface variables
+							for (size_t k = inst + 3 + ((strlen(reinterpret_cast<const char *>(&spirv[inst + 3])) + 4) / 4); k < inst + len; ++k)
+								variables_to_remove.push_back(spirv[k]);
+
+							// Remove this entry point from the module
+							spirv.erase(spirv.begin() + inst, spirv.begin() + inst + len);
+							continue;
+						}
+						break;
+					case 16: // OpExecutionMode
+						if (std::find(functions_to_remove.begin(), functions_to_remove.end(), spirv[inst + 1]) != functions_to_remove.end())
+						{
+							spirv.erase(spirv.begin() + inst, spirv.begin() + inst + len);
+							continue;
+						}
+						break;
+					case 59: // OpVariable
+						// Remove all declarations of the interface variables for non-matching entry points
+						if (std::find(variables_to_remove.begin(), variables_to_remove.end(), spirv[inst + 2]) != variables_to_remove.end())
+						{
+							spirv.erase(spirv.begin() + inst, spirv.begin() + inst + len);
+							continue;
+						}
+						break;
+					case 71: // OpDecorate
+						// Remove all decorations targeting any of the interface variables for non-matching entry points
+						if (std::find(variables_to_remove.begin(), variables_to_remove.end(), spirv[inst + 1]) != variables_to_remove.end())
+						{
+							spirv.erase(spirv.begin() + inst, spirv.begin() + inst + len);
+							continue;
+						}
+						break;
+					case 54: // OpFunction
+						current_function = spirv[inst + 2];
+						current_function_offset = inst;
+						break;
+					case 56: // OpFunctionEnd
+						// Remove all function definitions for non-matching entry points
+						if (std::find(functions_to_remove.begin(), functions_to_remove.end(), current_function) != functions_to_remove.end())
+						{
+							spirv.erase(spirv.begin() + current_function_offset, spirv.begin() + inst + len);
+							inst = current_function_offset;
+							continue;
+						}
+						break;
+					}
+
+					inst += len;
+				}
 
 				VkShaderModuleCreateInfo create_info { VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO };
 				create_info.codeSize = spirv.size() * sizeof(uint32_t);
@@ -810,11 +927,9 @@ bool reshade::vulkan::runtime_vk::init_effect(size_t index)
 			break;
 		}
 
+		// Unset bindings are not allowed, so fail initialization for the entire effect in that case
 		if (image_binding.imageView == VK_NULL_HANDLE)
-		{
-			// Unset bindings are not allowed, so fail initialization for the entire effect
 			return false;
-		}
 
 		VkSamplerCreateInfo create_info { VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO };
 		create_info.addressModeU = static_cast<VkSamplerAddressMode>(static_cast<uint32_t>(info.address_u) - 1);
@@ -1106,11 +1221,14 @@ bool reshade::vulkan::runtime_vk::init_effect(size_t index)
 					attachment_desc.finalLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
 				}
 
-				{   VkSubpassDependency subdep = {};
+				{   // Synchronize any writes to render targets in previous passes with reads from them in this pass
+					VkSubpassDependency subdep = {};
 					subdep.srcSubpass = VK_SUBPASS_EXTERNAL;
+					subdep.dstSubpass = 0;
 					subdep.srcStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
-					subdep.dstStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
-					subdep.dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+					subdep.dstStageMask = VK_PIPELINE_STAGE_ALL_GRAPHICS_BIT;
+					subdep.srcAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+					subdep.dstAccessMask = VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_COLOR_ATTACHMENT_READ_BIT | VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
 
 					VkSubpassDescription subpass = {};
 					subpass.pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS;
@@ -1162,7 +1280,24 @@ bool reshade::vulkan::runtime_vk::init_effect(size_t index)
 			// No vertex attributes
 
 			VkPipelineInputAssemblyStateCreateInfo ia_info { VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO };
-			ia_info.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
+			switch (pass_info.topology)
+			{
+			case reshadefx::primitive_topology::point_list:
+				ia_info.topology = VK_PRIMITIVE_TOPOLOGY_POINT_LIST;
+				break;
+			case reshadefx::primitive_topology::line_list:
+				ia_info.topology = VK_PRIMITIVE_TOPOLOGY_LINE_LIST;
+				break;
+			case reshadefx::primitive_topology::line_strip:
+				ia_info.topology = VK_PRIMITIVE_TOPOLOGY_LINE_STRIP;
+				break;
+			case reshadefx::primitive_topology::triangle_list:
+				ia_info.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
+				break;
+			case reshadefx::primitive_topology::triangle_strip:
+				ia_info.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_STRIP;
+				break;
+			}
 
 			VkPipelineViewportStateCreateInfo viewport_info { VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO };
 			viewport_info.viewportCount = 1;
@@ -1226,7 +1361,8 @@ bool reshade::vulkan::runtime_vk::init_effect(size_t index)
 }
 void reshade::vulkan::runtime_vk::unload_effect(size_t index)
 {
-	wait_for_command_buffers(); // Make sure no effect resources are currently in use
+	// Make sure no effect resources are currently in use
+	wait_for_command_buffers();
 
 	for (technique &tech : _techniques)
 	{
@@ -1270,7 +1406,8 @@ void reshade::vulkan::runtime_vk::unload_effect(size_t index)
 }
 void reshade::vulkan::runtime_vk::unload_effects()
 {
-	wait_for_command_buffers(); // Make sure no effect resources are currently in use
+	// Make sure no effect resources are currently in use
+	wait_for_command_buffers();
 
 	for (technique &tech : _techniques)
 	{
@@ -1596,6 +1733,21 @@ void reshade::vulkan::runtime_vk::render_technique(technique &technique)
 		return;
 	const VkCommandBuffer cmd_list = _cmd_buffers[_cmd_index].first;
 
+#ifndef NDEBUG
+	const bool insert_debug_markers = vk.CmdDebugMarkerBeginEXT != nullptr && vk.CmdDebugMarkerEndEXT != nullptr;
+	if (insert_debug_markers)
+	{
+		VkDebugMarkerMarkerInfoEXT debug_info { VK_STRUCTURE_TYPE_DEBUG_MARKER_MARKER_INFO_EXT };
+		debug_info.pMarkerName = technique.name.c_str();
+		debug_info.color[0] = 0.8f;
+		debug_info.color[1] = 0.0f;
+		debug_info.color[2] = 0.8f;
+		debug_info.color[3] = 1.0f;
+
+		vk.CmdDebugMarkerBeginEXT(cmd_list, &debug_info);
+	}
+#endif
+
 	// Reset current queries and then write time stamp value
 	vk.CmdResetQueryPool(cmd_list, effect_data.query_pool, impl->query_base_index + _cmd_index * 2, 2);
 	vk.CmdWriteTimestamp(cmd_list, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, effect_data.query_pool, impl->query_base_index + _cmd_index * 2);
@@ -1636,6 +1788,22 @@ void reshade::vulkan::runtime_vk::render_technique(technique &technique)
 		const vulkan_pass_data &pass_data = impl->passes[pass_index];
 		const reshadefx::pass_info &pass_info = technique.passes[pass_index];
 
+#ifndef NDEBUG
+		if (insert_debug_markers)
+		{
+			const std::string pass_name = "Pass " + std::to_string(pass_index);
+
+			VkDebugMarkerMarkerInfoEXT debug_info { VK_STRUCTURE_TYPE_DEBUG_MARKER_MARKER_INFO_EXT };
+			debug_info.pMarkerName = pass_name.c_str();
+			debug_info.color[0] = 0.8f;
+			debug_info.color[1] = 0.8f;
+			debug_info.color[2] = 0.8f;
+			debug_info.color[3] = 1.0f;
+
+			vk.CmdDebugMarkerBeginEXT(cmd_list, &debug_info);
+		}
+#endif
+
 		if (pass_info.stencil_enable && !is_effect_stencil_cleared)
 		{
 			is_effect_stencil_cleared = true;
@@ -1663,7 +1831,7 @@ void reshade::vulkan::runtime_vk::render_technique(technique &technique)
 		// Setup states
 		vk.CmdBindPipeline(cmd_list, VK_PIPELINE_BIND_POINT_GRAPHICS, pass_data.pipeline);
 
-		// Draw triangle
+		// Draw primitives
 		vk.CmdDraw(cmd_list, pass_info.num_vertices, 1, 0, 0);
 
 		_vertices += pass_info.num_vertices;
@@ -1681,6 +1849,11 @@ void reshade::vulkan::runtime_vk::render_technique(technique &technique)
 
 			generate_mipmaps(*render_target_texture);
 		}
+
+#ifndef NDEBUG
+		if (insert_debug_markers)
+			vk.CmdDebugMarkerEndEXT(cmd_list);
+#endif
 	}
 
 #if RESHADE_DEPTH
@@ -1694,6 +1867,11 @@ void reshade::vulkan::runtime_vk::render_technique(technique &technique)
 #endif
 
 	vk.CmdWriteTimestamp(cmd_list, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, effect_data.query_pool, impl->query_base_index + _cmd_index * 2 + 1);
+
+#ifndef NDEBUG
+	if (insert_debug_markers)
+		vk.CmdDebugMarkerEndEXT(cmd_list);
+#endif
 }
 
 bool reshade::vulkan::runtime_vk::begin_command_buffer() const
@@ -1722,8 +1900,15 @@ void reshade::vulkan::runtime_vk::execute_command_buffer() const
 	check_result(vk.EndCommandBuffer(cmd_info.first));
 
 	VkSubmitInfo submit_info { VK_STRUCTURE_TYPE_SUBMIT_INFO };
+	// Wait for any semaphores from the application, so it has a chance to finish rendering before e.g. capturing a screenshot
+	submit_info.waitSemaphoreCount = static_cast<uint32_t>(_wait_semaphores.size());
+	submit_info.pWaitSemaphores = _wait_semaphores.data();
+	submit_info.pWaitDstStageMask = _wait_stages.data();
 	submit_info.commandBufferCount = 1;
 	submit_info.pCommandBuffers = &cmd_info.first;
+	// Signal those same semaphores again right after, so they continue to work in the next submit
+	submit_info.signalSemaphoreCount = static_cast<uint32_t>(_wait_semaphores.size());
+	submit_info.pSignalSemaphores = _wait_semaphores.data();
 
 	const VkFence fence = _cmd_fences[NUM_COMMAND_FRAMES]; // Use special fence reserved for synchronous execution
 	if (vk.QueueSubmit(_queue, 1, &submit_info, fence) == VK_SUCCESS)
@@ -1761,6 +1946,17 @@ VkImage reshade::vulkan::runtime_vk::create_image(uint32_t width, uint32_t heigh
 	create_info.usage = usage;
 	create_info.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
 	create_info.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+
+	const VkFormat format_list[2] = { make_format_normal(format), make_format_srgb(format) };
+	VkImageFormatListCreateInfoKHR format_list_info { VK_STRUCTURE_TYPE_IMAGE_FORMAT_LIST_CREATE_INFO_KHR };
+
+	if (format_list[0] != format_list[1] && (flags & VK_IMAGE_CREATE_MUTABLE_FORMAT_BIT) != 0)
+	{
+		format_list_info.viewFormatCount = 2;
+		format_list_info.pViewFormats = format_list;
+
+		create_info.pNext = &format_list_info;
+	}
 
 	VmaAllocation alloc = VK_NULL_HANDLE;
 	VmaAllocationCreateInfo alloc_info = {};
@@ -2229,6 +2425,9 @@ void reshade::vulkan::runtime_vk::draw_depth_debug_menu(buffer_detection_context
 
 void reshade::vulkan::runtime_vk::update_depth_image_bindings(buffer_detection::depthstencil_info info)
 {
+	if (_has_high_network_activity)
+		info = buffer_detection::depthstencil_info {};
+
 	if (info.image == _depth_image)
 		return;
 

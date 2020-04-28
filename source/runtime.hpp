@@ -1,4 +1,4 @@
-/**
+/*
  * Copyright (C) 2014 Patrick Mours. All rights reserved.
  * License: https://github.com/crosire/reshade#license
  */
@@ -155,7 +155,7 @@ namespace reshade
 		/// <summary>
 		/// Load all effects found in the effect search paths.
 		/// </summary>
-		bool load_effects();
+		void load_effects();
 		/// <summary>
 		/// Initialize resources for the effect and load the effect module.
 		/// </summary>
@@ -268,6 +268,7 @@ namespace reshade
 		int _date[4] = {};
 		bool _effects_enabled = true;
 		bool _ignore_shortcuts = false;
+		bool _force_shortcut_modifiers = true;
 		unsigned int _effects_key_data[4];
 		std::shared_ptr<class input> _input;
 		std::chrono::high_resolution_clock::duration _last_frame_duration;
@@ -343,6 +344,7 @@ namespace reshade
 		ImGuiContext *_imgui_context = nullptr;
 		std::unique_ptr<texture> _imgui_font_atlas;
 		std::vector<std::pair<std::string, std::function<void()>>> _menu_callables;
+		std::string _window_state_path;
 		bool _show_menu = false;
 		bool _show_clock = false;
 		bool _show_fps = false;
@@ -351,7 +353,7 @@ namespace reshade
 		bool _show_code_editor = false;
 		bool _show_screenshot_message = true;
 		bool _no_font_scaling = false;
-		bool _rebuild_font_atlas = false;
+		bool _rebuild_font_atlas = true;
 		unsigned int _menu_key_data[4];
 		int _fps_pos = 1;
 		int _clock_format = 0;

@@ -6,19 +6,25 @@
 using System.Collections.Generic;
 using System.Collections.ObjectModel;
 using System.ComponentModel;
-using System.IO;
+using System.Diagnostics;
 using System.Linq;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
+using System.Windows.Navigation;
 
 namespace ReShade.Setup.Dialogs
 {
-	public class EffectFile : INotifyPropertyChanged
+	public class EffectPackage : INotifyPropertyChanged
 	{
 		public bool Enabled { get; set; }
-		public string FileName { get; set; }
-		public string FilePath { get; set; }
+		public bool Modifiable { get; set; }
+		public string PackageName { get; set; }
+		public string PackageDescription { get; set; }
+		public string InstallPath { get; set; }
+		public string TextureInstallPath { get; set; }
+		public string DownloadUrl { get; set; }
+		public string RepositoryUrl { get; set; }
 
 		public event PropertyChangedEventHandler PropertyChanged;
 		internal void NotifyPropertyChanged(string propertyName)
@@ -27,49 +33,31 @@ namespace ReShade.Setup.Dialogs
 		}
 	}
 
-	public partial class SelectEffectsDialog : Window
+	public partial class SelectPackagesDialog : Window
 	{
-		public SelectEffectsDialog(string packageName, IEnumerable<string> files)
+		public SelectPackagesDialog(Utilities.IniFile packagesIni)
 		{
 			InitializeComponent();
 			DataContext = this;
 
-			// Remove any author description from display name
-			int authorIndex = packageName.IndexOf(" by ");
-			if (authorIndex != -1)
+			foreach (var package in packagesIni.GetSections())
 			{
-				packageName = packageName.Remove(authorIndex);
-			}
-
-			// Put package name in quotes in the tile, so repeating words do not look odd
-			PackageName.Text = '\"' + packageName + '\"';
-
-			var isAnyEnabled = false;
-			foreach (var path in files)
-			{
-				bool enabled = File.Exists(path);
-				isAnyEnabled = isAnyEnabled || enabled;
-
-				Items.Add(new EffectFile
+				Items.Add(new EffectPackage
 				{
-					Enabled = enabled,
-					FileName = Path.GetFileName(path),
-					FilePath = path
+					Enabled = packagesIni.GetString(package, "Enabled") == "1",
+					Modifiable = packagesIni.GetString(package, "Required") != "1",
+					PackageName = packagesIni.GetString(package, "PackageName"),
+					PackageDescription = packagesIni.GetString(package, "PackageDescription"),
+					InstallPath = packagesIni.GetString(package, "InstallPath"),
+					TextureInstallPath = packagesIni.GetString(package, "TextureInstallPath"),
+					DownloadUrl = packagesIni.GetString(package, "DownloadUrl"),
+					RepositoryUrl = packagesIni.GetString(package, "RepositoryUrl")
 				});
-			}
-
-			// Enable all items if none is enabled (which indicates that the package was not previously installed yet)
-			if (!isAnyEnabled)
-			{
-				foreach (var item in Items)
-				{
-					item.Enabled = true;
-				}
 			}
 		}
 
-		public IEnumerable<EffectFile> EnabledItems => Items.Where(x => x.Enabled);
-		public ObservableCollection<EffectFile> Items { get; } = new ObservableCollection<EffectFile>();
+		public IEnumerable<EffectPackage> EnabledItems => Items.Where(x => x.Enabled);
+		public ObservableCollection<EffectPackage> Items { get; } = new ObservableCollection<EffectPackage>();
 
 		void OnCheck(object sender, RoutedEventArgs e)
 		{
@@ -88,12 +76,21 @@ namespace ReShade.Setup.Dialogs
 
 				foreach (var item in Items)
 				{
+					if (!item.Modifiable)
+					{
+						continue;
+					}
+
 					item.Enabled = check;
 					item.NotifyPropertyChanged(nameof(item.Enabled));
 				}
 			}
 		}
 
+		void OnCancel(object sender, RoutedEventArgs e)
+		{
+			DialogResult = false;
+		}
 		void OnConfirm(object sender, RoutedEventArgs e)
 		{
 			DialogResult = true;
@@ -112,6 +109,19 @@ namespace ReShade.Setup.Dialogs
 			{
 				checkbox.IsChecked = !checkbox.IsChecked;
 				checkbox.ReleaseMouseCapture();
+			}
+		}
+
+		void OnHyperlinkRequestNavigate(object sender, RequestNavigateEventArgs e)
+		{
+			try
+			{
+				Process.Start(e.Uri.AbsoluteUri);
+				e.Handled = true;
+			}
+			catch
+			{
+				e.Handled = false;
 			}
 		}
 	}

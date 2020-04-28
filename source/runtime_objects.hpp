@@ -1,4 +1,4 @@
-/**
+/*
  * Copyright (C) 2014 Patrick Mours. All rights reserved.
  * License: https://github.com/crosire/reshade#license
  */
@@ -23,6 +23,7 @@ namespace reshade
 		mouse_delta,
 		mouse_button,
 		freepie,
+		overlay_open,
 		bufready_depth,
 	};
 

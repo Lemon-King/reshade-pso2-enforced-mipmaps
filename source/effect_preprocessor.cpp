@@ -1,4 +1,4 @@
-/**
+/*
  * Copyright (C) 2014 Patrick Mours. All rights reserved.
  * License: https://github.com/crosire/reshade#license
  */
@@ -6,6 +6,12 @@
 #include "effect_lexer.hpp"
 #include "effect_preprocessor.hpp"
 #include <cassert>
+
+#ifndef _WIN32
+	// On Linux systems the native path encoding is UTF-8 already, so no conversion necessary
+	#define u8path(p) path(p)
+	#define u8string() string()
+#endif
 
 enum op_type
 {
@@ -69,25 +75,25 @@ static bool read_file(const std::filesystem::path &path, std::string &data)
 #endif
 
 	// Read file contents into memory
-	std::vector<char> mem(static_cast<size_t>(std::filesystem::file_size(path) + 1));
-	const size_t eof = fread(mem.data(), 1, mem.size() - 1, file);
+	std::vector<char> file_mem(static_cast<size_t>(std::filesystem::file_size(path) + 1));
+	const size_t eof = fread(file_mem.data(), 1, file_mem.size() - 1, file);
 
 	// Append a new line feed to the end of the input string to avoid issues with parsing
-	mem[eof] = '\n';
+	file_mem[eof] = '\n';
 
 	// No longer need to have a handle open to the file, since all data was read, so can safely close it
 	fclose(file);
 
-	std::string_view filedata(mem.data(), mem.size());
+	std::string_view file_data(file_mem.data(), file_mem.size());
 
 	// Remove BOM (0xefbbbf means 0xfeff)
-	if (filedata.size() >= 3 &&
-		static_cast<unsigned char>(filedata[0]) == 0xef &&
-		static_cast<unsigned char>(filedata[1]) == 0xbb &&
-		static_cast<unsigned char>(filedata[2]) == 0xbf)
-		filedata = std::string_view(filedata.data() + 3, filedata.size() - 3);
+	if (file_data.size() >= 3 &&
+		static_cast<unsigned char>(file_data[0]) == 0xef &&
+		static_cast<unsigned char>(file_data[1]) == 0xbb &&
+		static_cast<unsigned char>(file_data[2]) == 0xbf)
+		file_data = std::string_view(file_data.data() + 3, file_data.size() - 3);
 
-	data = filedata;
+	data = file_data;
 	return true;
 }
 
@@ -95,7 +101,7 @@ static std::string escape_string(std::string s)
 {
 	for (size_t offset = 0; (offset = s.find('\\', offset)) != std::string::npos; offset += 2)
 		s.insert(offset, "\\", 1);
-	return s;
+	return '\"' + s + '\"';
 }
 
 reshadefx::preprocessor::preprocessor()
@@ -108,13 +114,11 @@ reshadefx::preprocessor::~preprocessor()
 void reshadefx::preprocessor::add_include_path(const std::filesystem::path &path)
 {
 	assert(!path.empty());
-
 	_include_paths.push_back(path);
 }
 bool reshadefx::preprocessor::add_macro_definition(const std::string &name, const macro &macro)
 {
 	assert(!name.empty());
-
 	return _macros.emplace(name, macro).second;
 }
 
@@ -126,11 +130,7 @@ bool reshadefx::preprocessor::append_file(const std::filesystem::path &path)
 
 	_success = true; // Clear success flag before parsing a new file
 
-#ifdef _WIN32
 	push(std::move(data), path.u8string());
-#else
-	push(std::move(data), path.string());
-#endif
 	parse();
 
 	return _success;
@@ -151,8 +151,8 @@ bool reshadefx::preprocessor::append_string(const std::string &source_code)
 std::vector<std::filesystem::path> reshadefx::preprocessor::included_files() const
 {
 	std::vector<std::filesystem::path> files;
-	files.reserve(_filecache.size());
-	for (const auto &it : _filecache)
+	files.reserve(_file_cache.size());
+	for (const auto &it : _file_cache)
 		files.push_back(std::filesystem::u8path(it.first));
 	return files;
 }
@@ -160,9 +160,10 @@ std::vector<std::pair<std::string, std::string>> reshadefx::preprocessor::used_m
 {
 	std::vector<std::pair<std::string, std::string>> defines;
 	defines.reserve(_used_macros.size());
-	for (const auto &name : _used_macros)
-		// Do not include function-like macros, since they are more likely to contain a complex replacement list
-		if (const auto it = _macros.find(name); it != _macros.end() && !it->second.is_function_like)
+	for (const std::string &name : _used_macros)
+		if (const auto it = _macros.find(name);
+			// Do not include function-like macros, since they are more likely to contain a complex replacement list
+			it != _macros.end() && !it->second.is_function_like)
 			defines.push_back({ name, it->second.replacement_list });
 	return defines;
 }
@@ -179,27 +180,33 @@ void reshadefx::preprocessor::warning(const location &location, const std::strin
 
 void reshadefx::preprocessor::push(std::string input, const std::string &name)
 {
-	input_level level = {};
-	level.lexer.reset(new lexer(std::move(input), true, false, false, false, true, false));
-	level.next_token.id = tokenid::unknown;
+	location start_location = !name.empty() ?
+		// Start at the beginning of the file when pushing a new file
+		location(name, 1) :
+		// Start with last known token location when pushing an unnamed string
+		_token.location;
 
-	// Initialize location information
-	if (!name.empty())
-	{
-		level.name = name;
-		_output += "#line 1 \"" + name + "\"\n";
-		_output_location.source = name;
-	}
+	input_level level = { name };
+	level.lexer.reset(new lexer(
+		std::move(input),
+		true  /* ignore_comments */,
+		false /* ignore_whitespace */,
+		false /* ignore_pp_directives */,
+		false /* ignore_line_directives */,
+		true  /* ignore_keywords */,
+		false /* escape_string_literals */,
+		start_location));
+	level.next_token.id = tokenid::unknown;
+	level.next_token.location = start_location; // This is used in 'consume' to initialize the output location
 
 	// Inherit hidden macros from parent
 	if (!_input_stack.empty())
-	{
 		level.hidden_macros = _input_stack.back().hidden_macros;
-	}
 
 	_input_stack.push_back(std::move(level));
 	_next_input_index = _input_stack.size() - 1;
 
+	// Advance into the input stack to update next token
 	consume();
 }
 
@@ -211,6 +218,13 @@ bool reshadefx::preprocessor::consume()
 {
 	_current_input_index = _next_input_index;
 
+	if (_input_stack.empty())
+	{
+		// End of input has been reached already (this can happen when the input text is not terminated with a new line)
+		assert(_current_input_index == 0);
+		return false;
+	}
+
 	// Clear out input stack, now that the current token is overwritten
 	while (_input_stack.size() > (_current_input_index + 1))
 		_input_stack.pop_back();
@@ -220,17 +234,20 @@ bool reshadefx::preprocessor::consume()
 	if (!input.name.empty() && input.name != _output_location.source)
 	{
 		_output += "#line " + std::to_string(input.next_token.location.line) + " \"" + input.name + "\"\n";
-		_output_location.line = _token.location.line;
+		_output_location.line = input.next_token.location.line;
 		_output_location.source = input.name;
 	}
 
 	// Set current token
 	_token = std::move(input.next_token);
-	_token.location.source = _output_location.source;
 	_current_token_raw_data = input.lexer->input_string().substr(_token.offset, _token.length);
 
 	// Get the next token
 	input.next_token = input.lexer->lex();
+
+	// Verify string literals (since the lexer cannot throw errors itself)
+	if (_token == tokenid::string_literal && _current_token_raw_data.back() != '\"')
+		error(_token.location, "unterminated string literal");
 
 	// Pop input level if lexical analysis has reached the end of it
 	// This ensures the EOF token is not consumed until the very last file
@@ -238,9 +255,7 @@ bool reshadefx::preprocessor::consume()
 	{
 		// Remove any unterminated blocks from the stack
 		for (; !_if_stack.empty() && _if_stack.back().input_index >= _next_input_index; _if_stack.pop_back())
-		{
-			error(_if_stack.back().token.location, "unterminated #if");
-		}
+			error(_if_stack.back().pp_token.location, "unterminated #if");
 
 		if (_next_input_index == 0)
 		{
@@ -248,8 +263,10 @@ bool reshadefx::preprocessor::consume()
 			_input_stack.pop_back();
 			return false;
 		}
-
-		_next_input_index--;
+		else
+		{
+			_next_input_index -= 1;
+		}
 	}
 
 	return true;
@@ -335,6 +352,9 @@ void reshadefx::preprocessor::parse()
 			if (!expect(tokenid::end_of_line))
 				consume_until(tokenid::end_of_line);
 			continue;
+		default:
+			// All other tokens are handled below
+			break;
 		}
 
 		if (skip)
@@ -399,6 +419,7 @@ void reshadefx::preprocessor::parse()
 
 	// Append the last line after the EOF was reached to the output
 	_output += line;
+	_output += '\n';
 }
 
 void reshadefx::preprocessor::parse_def()
@@ -413,6 +434,7 @@ void reshadefx::preprocessor::parse_def()
 	const auto macro_name = std::move(_token.literal_as_string);
 	const auto macro_name_end_offset = _token.offset + _token.length;
 
+	// Check input string here directly to ensure the parenthesis follows the macro name without any whitespace between
 	if (_input_stack[_current_input_index].lexer->input_string()[macro_name_end_offset] == '(')
 	{
 		accept(tokenid::parenthesis_open);
@@ -459,43 +481,61 @@ void reshadefx::preprocessor::parse_undef()
 void reshadefx::preprocessor::parse_if()
 {
 	if_level level;
-	level.token = _token;
+	level.pp_token = _token;
 	level.input_index = _current_input_index;
 
+	// Evaluate expression after updating 'pp_token', so that it points at the beginning # token
 	level.value = evaluate_expression();
-	level.skipping = (!_if_stack.empty() && _if_stack.back().skipping) || !level.value;
+
+	const bool parent_skipping = !_if_stack.empty() && _if_stack.back().skipping;
+	level.skipping = parent_skipping || !level.value;
 
 	_if_stack.push_back(std::move(level));
 }
 void reshadefx::preprocessor::parse_ifdef()
 {
 	if_level level;
-	level.token = _token;
+	level.pp_token = _token;
 	level.input_index = _current_input_index;
 
 	if (!expect(tokenid::identifier))
 		return;
 
-	level.value = _macros.find(_token.literal_as_string) != _macros.end();
-	level.skipping = (!_if_stack.empty() && _if_stack.back().skipping) || !level.value;
+	level.value = _macros.find(_token.literal_as_string) != _macros.end() ||
+		// Check built-in macros as well
+		_token.literal_as_string == "__LINE__" ||
+		_token.literal_as_string == "__FILE__" ||
+		_token.literal_as_string == "__FILE_NAME__" ||
+		_token.literal_as_string == "__FILE_STEM__";
+
+	const bool parent_skipping = !_if_stack.empty() && _if_stack.back().skipping;
+	level.skipping = parent_skipping || !level.value;
 
 	_if_stack.push_back(std::move(level));
-	_used_macros.emplace(_token.literal_as_string);
+	if (!parent_skipping) // Only add if this #ifdef is active
+		_used_macros.emplace(_token.literal_as_string);
 }
 void reshadefx::preprocessor::parse_ifndef()
 {
 	if_level level;
-	level.token = _token;
+	level.pp_token = _token;
 	level.input_index = _current_input_index;
 
 	if (!expect(tokenid::identifier))
 		return;
 
-	level.value = _macros.find(_token.literal_as_string) == _macros.end();
-	level.skipping = (!_if_stack.empty() && _if_stack.back().skipping) || !level.value;
+	level.value = _macros.find(_token.literal_as_string) == _macros.end() &&
+		_token.literal_as_string != "__LINE__" &&
+		_token.literal_as_string != "__FILE__" &&
+		_token.literal_as_string != "__FILE_NAME__" &&
+		_token.literal_as_string != "__FILE_STEM__";
+
+	const bool parent_skipping = !_if_stack.empty() && _if_stack.back().skipping;
+	level.skipping = parent_skipping || !level.value;
 
 	_if_stack.push_back(std::move(level));
-	_used_macros.emplace(_token.literal_as_string);
+	if (!parent_skipping) // Only add if this #ifndef is active
+		_used_macros.emplace(_token.literal_as_string);
 }
 void reshadefx::preprocessor::parse_elif()
 {
@@ -503,15 +543,16 @@ void reshadefx::preprocessor::parse_elif()
 		return error(_token.location, "missing #if for #elif");
 
 	if_level &level = _if_stack.back();
-	if (level.token == tokenid::hash_else)
+	if (level.pp_token == tokenid::hash_else)
 		return error(_token.location, "#elif is not allowed after #else");
 
-	const bool condition_result = evaluate_expression();
-
-	level.token = _token;
+	// Update 'pp_token' before evaluating expression, so that it points at the beginning # token
+	level.pp_token = _token;
 	level.input_index = _current_input_index;
 
-	level.skipping = (_if_stack.size() > 1 && _if_stack[_if_stack.size() - 2].skipping) || level.value || !condition_result;
+	const bool parent_skipping = _if_stack.size() > 1 && _if_stack[_if_stack.size() - 2].skipping;
+	const bool condition_result = evaluate_expression();
+	level.skipping = parent_skipping || level.value || !condition_result;
 
 	if (!level.value) level.value = condition_result;
 }
@@ -521,13 +562,14 @@ void reshadefx::preprocessor::parse_else()
 		return error(_token.location, "missing #if for #else");
 
 	if_level &level = _if_stack.back();
-	if (level.token == tokenid::hash_else)
+	if (level.pp_token == tokenid::hash_else)
 		return error(_token.location, "#else is not allowed after #else");
 
-	level.token = _token;
+	level.pp_token = _token;
 	level.input_index = _current_input_index;
 
-	level.skipping = (_if_stack.size() > 1 && _if_stack[_if_stack.size() - 2].skipping) || level.value;
+	const bool parent_skipping = _if_stack.size() > 1 && _if_stack[_if_stack.size() - 2].skipping;
+	level.skipping = parent_skipping || level.value;
 
 	if (!level.value) level.value = true;
 }
@@ -574,7 +616,7 @@ void reshadefx::preprocessor::parse_pragma()
 
 	if (pragma == "once")
 	{
-		if (const auto it = _filecache.find(_output_location.source); it != _filecache.end())
+		if (const auto it = _file_cache.find(_output_location.source); it != _file_cache.end())
 			it->second.clear();
 		return;
 	}
@@ -602,50 +644,47 @@ void reshadefx::preprocessor::parse_include()
 		return;
 	}
 
-	const std::filesystem::path filename = std::filesystem::u8path(_token.literal_as_string);
+	std::filesystem::path file_name = std::filesystem::u8path(_token.literal_as_string);
+	std::filesystem::path file_path = std::filesystem::u8path(_output_location.source);
+	file_path.replace_filename(file_name);
 
-	std::error_code ec;
-	std::filesystem::path filepath = std::filesystem::u8path(_output_location.source);
-	filepath.replace_filename(filename);
-
-	if (!std::filesystem::exists(filepath, ec))
-		for (const auto &include_path : _include_paths)
-			if (std::filesystem::exists(filepath = include_path / filename, ec))
+	if (std::error_code ec; !std::filesystem::exists(file_path, ec))
+		for (const std::filesystem::path &include_path : _include_paths)
+			if (std::filesystem::exists(file_path = include_path / file_name, ec))
 				break;
 
-#ifdef _WIN32
-	const std::string filepath_string = filepath.u8string();
-#else
-	const std::string filepath_string = filepath.string();
-#endif
+	const std::string file_path_string = file_path.u8string();
 
 	// Detect recursive include and abort to avoid infinite loop
 	if (std::find_if(_input_stack.begin(), _input_stack.end(),
-		[&filepath_string](const auto &level) { return level.name == filepath_string; }) != _input_stack.end())
+		[&file_path_string](const input_level &level) { return level.name == file_path_string; }) != _input_stack.end())
 	{
 		error(_token.location, "recursive #include");
 		return;
 	}
 
 	std::string data;
-	if (auto it = _filecache.find(filepath_string);
-		it != _filecache.end())
+	if (auto it = _file_cache.find(file_path_string);
+		it != _file_cache.end())
 	{
 		data = it->second;
 	}
 	else
 	{
-		if (!read_file(filepath, data))
+		if (!read_file(file_path, data))
 		{
-			error(keyword_location, "could not open included file '" + filepath_string + '\'');
+			error(keyword_location, "could not open included file '" + file_path_string + '\'');
 			consume_until(tokenid::end_of_line);
 			return;
 		}
 
-		_filecache.emplace(filepath_string, data);
+		_file_cache.emplace(file_path_string, data);
 	}
 
-	push(std::move(data), filepath_string);
+	// Clear out input stack before pushing include so that hidden macros do not bleed into the include
+	while (_input_stack.size() > (_next_input_index + 1))
+		_input_stack.pop_back();
+	push(std::move(data), file_path_string);
 }
 
 bool reshadefx::preprocessor::evaluate_expression()
@@ -762,6 +801,9 @@ bool reshadefx::preprocessor::evaluate_expression()
 		case tokenid::pipe_pipe:
 			op = op_or;
 			break;
+		default:
+			// This is not an operator token
+			break;
 		}
 
 		switch (_token)
@@ -806,20 +848,19 @@ bool reshadefx::preprocessor::evaluate_expression()
 				}
 				if (!expect(tokenid::string_literal))
 					return false;
-				const std::filesystem::path filename = std::filesystem::u8path(_token.literal_as_string);
+				std::filesystem::path file_name = std::filesystem::u8path(_token.literal_as_string);
 				if (has_parentheses && !expect(tokenid::parenthesis_close))
 					return false;
+				std::filesystem::path file_path = std::filesystem::u8path(_output_location.source);
+				file_path.replace_filename(file_name);
 
 				std::error_code ec;
-				std::filesystem::path filepath = std::filesystem::u8path(_output_location.source);
-				filepath.replace_filename(filename);
-
-				if (!std::filesystem::exists(filepath, ec))
-					for (const auto &include_path : _include_paths)
-						if (std::filesystem::exists(filepath = include_path / filename, ec))
+				if (!std::filesystem::exists(file_path, ec))
+					for (const std::filesystem::path &include_path : _include_paths)
+						if (std::filesystem::exists(file_path = include_path / file_name, ec))
 							break;
 
-				rpn[rpn_index++] = { std::filesystem::exists(filepath, ec) ? 1 : 0, false };
+				rpn[rpn_index++] = { std::filesystem::exists(file_path, ec) ? 1 : 0, false };
 				continue;
 			}
 			if (_token.literal_as_string == "defined")
@@ -855,7 +896,9 @@ bool reshadefx::preprocessor::evaluate_expression()
 				if (prev_op == op_parentheses)
 					break;
 
-				if (is_left_associative ? (precedence_lookup[op] > precedence_lookup[prev_op]) : (precedence_lookup[op] >= precedence_lookup[prev_op]))
+				if (is_left_associative ?
+					(precedence_lookup[op] > precedence_lookup[prev_op]) :
+					(precedence_lookup[op] >= precedence_lookup[prev_op]))
 					break;
 
 				stack_index--;
@@ -894,7 +937,7 @@ bool reshadefx::preprocessor::evaluate_expression()
 	}
 
 	// Evaluate reverse polish notation output
-	for (auto *token = rpn; rpn_index--; token++)
+	for (rpn_token *token = rpn; rpn_index--; token++)
 	{
 		if (token->is_op)
 		{
@@ -982,16 +1025,29 @@ bool reshadefx::preprocessor::evaluate_expression()
 
 	return stack[0] != 0;
 }
+
 bool reshadefx::preprocessor::evaluate_identifier_as_macro()
 {
-	if (_token.literal_as_string == "__FILE__")
-	{
-		push('\"' + escape_string(_token.location.source) + '\"');
-		return true;
-	}
 	if (_token.literal_as_string == "__LINE__")
 	{
 		push(std::to_string(_token.location.line));
+		return true;
+	}
+	if (_token.literal_as_string == "__FILE__")
+	{
+		push(escape_string(_token.location.source));
+		return true;
+	}
+	if (_token.literal_as_string == "__FILE_STEM__")
+	{
+		const std::filesystem::path file_stem = std::filesystem::u8path(_token.location.source).stem();
+		push(escape_string(file_stem.u8string()));
+		return true;
+	}
+	if (_token.literal_as_string == "__FILE_NAME__")
+	{
+		const std::filesystem::path file_name = std::filesystem::u8path(_token.location.source).filename();
+		push(escape_string(file_name.u8string()));
 		return true;
 	}
 
@@ -999,7 +1055,7 @@ bool reshadefx::preprocessor::evaluate_identifier_as_macro()
 	if (it == _macros.end())
 		return false;
 
-	const auto &hidden_macros = _input_stack[_current_input_index].hidden_macros;
+	const std::unordered_set<std::string> &hidden_macros = _input_stack[_current_input_index].hidden_macros;
 	if (hidden_macros.find(_token.literal_as_string) != hidden_macros.end())
 		return false;
 
@@ -1009,10 +1065,8 @@ bool reshadefx::preprocessor::evaluate_identifier_as_macro()
 		return false;
 	}
 
-	const auto &macro = it->second;
 	std::vector<std::string> arguments;
-
-	if (macro.is_function_like)
+	if (it->second.is_function_like)
 	{
 		if (!accept(tokenid::parenthesis_open))
 			return false;
@@ -1117,61 +1171,56 @@ void reshadefx::preprocessor::create_macro_replacement_list(macro &macro)
 
 		switch (_token)
 		{
-			case tokenid::hash:
-			{
-				if (accept(tokenid::hash))
-				{
-					if (peek(tokenid::end_of_line))
-					{
-						error(_token.location, "## cannot appear at end of macro text");
-						return;
-					}
-
-					// the ## token concatenation operator
-					macro.replacement_list += macro_replacement_start;
-					macro.replacement_list += macro_replacement_concat;
-					continue;
-				}
-				else if (macro.is_function_like)
-				{
-					if (!expect(tokenid::identifier))
-						return;
-
-					const auto it = std::find(macro.parameters.begin(), macro.parameters.end(), _token.literal_as_string);
-
-					if (it == macro.parameters.end())
-						return error(_token.location, "# must be followed by parameter name");
-
-					// the # stringize operator
-					macro.replacement_list += macro_replacement_start;
-					macro.replacement_list += macro_replacement_stringize;
-					macro.replacement_list += static_cast<char>(std::distance(macro.parameters.begin(), it));
-					continue;
-				}
-				break;
-			}
-			case tokenid::backslash:
+		case tokenid::hash:
+			if (accept(tokenid::hash))
 			{
 				if (peek(tokenid::end_of_line))
 				{
-					consume();
-					continue;
+					error(_token.location, "## cannot appear at end of macro text");
+					return;
 				}
-				break;
-			}
-			case tokenid::identifier:
-			{
-				const auto it = std::find(macro.parameters.begin(), macro.parameters.end(), _token.literal_as_string);
 
-				if (it != macro.parameters.end())
-				{
-					macro.replacement_list += macro_replacement_start;
-					macro.replacement_list += macro_replacement_argument;
-					macro.replacement_list += static_cast<char>(std::distance(macro.parameters.begin(), it));
-					continue;
-				}
-				break;
+				// Start a ## token concatenation operator
+				macro.replacement_list += macro_replacement_start;
+				macro.replacement_list += macro_replacement_concat;
+				continue;
 			}
+			else if (macro.is_function_like)
+			{
+				if (!expect(tokenid::identifier))
+					return;
+
+				const auto it = std::find(macro.parameters.begin(), macro.parameters.end(), _token.literal_as_string);
+				if (it == macro.parameters.end())
+					return error(_token.location, "# must be followed by parameter name");
+
+				// Start a # stringize operator
+				macro.replacement_list += macro_replacement_start;
+				macro.replacement_list += macro_replacement_stringize;
+				macro.replacement_list += static_cast<char>(std::distance(macro.parameters.begin(), it));
+				continue;
+			}
+			break;
+		case tokenid::backslash:
+			if (peek(tokenid::end_of_line))
+			{
+				consume();
+				continue;
+			}
+			break;
+		case tokenid::identifier:
+			if (const auto it = std::find(macro.parameters.begin(), macro.parameters.end(), _token.literal_as_string);
+				it != macro.parameters.end())
+			{
+				macro.replacement_list += macro_replacement_start;
+				macro.replacement_list += macro_replacement_argument;
+				macro.replacement_list += static_cast<char>(std::distance(macro.parameters.begin(), it));
+				continue;
+			}
+			break;
+		default:
+			// Token needs no special handling, raw data is added to macro below
+			break;
 		}
 
 		macro.replacement_list += _current_token_raw_data;

@@ -1,4 +1,4 @@
-/**
+/*
  * Copyright (C) 2014 Patrick Mours. All rights reserved.
  * License: https://github.com/crosire/reshade#license
  */
@@ -2135,7 +2135,7 @@ bool reshadefx::parser::parse_top()
 		while (!peek('}') && parse_success) // Empty namespaces are valid
 		{
 			if (!parse_top())
-				parse_success = false; // Continue parsing even after encountering an error
+				parse_success = false;
 		}
 
 		leave_namespace();
@@ -2572,7 +2572,7 @@ bool reshadefx::parser::parse_variable(type type, std::string name, bool global)
 					// Transform identifier to uppercase to do case-insensitive comparison
 					std::transform(_token.literal_as_string.begin(), _token.literal_as_string.end(), _token.literal_as_string.begin(), [](char c) { return static_cast<char>(toupper(c)); });
 
-					static const std::pair<const char *, uint32_t> s_values[] = {
+					static const std::unordered_map<std::string, uint32_t> s_values = {
 						{ "NONE", 0 }, { "POINT", 0 },
 						{ "LINEAR", 1 },
 						{ "WRAP", uint32_t(texture_address_mode::wrap) }, { "REPEAT", uint32_t(texture_address_mode::wrap) },
@@ -2594,10 +2594,8 @@ bool reshadefx::parser::parse_variable(type type, std::string name, bool global)
 					};
 
 					// Look up identifier in list of possible enumeration names
-					const auto it = std::find_if(std::begin(s_values), std::end(s_values),
-						[this](const auto &it) { return it.first == _token.literal_as_string; });
-
-					if (it != std::end(s_values))
+					if (const auto it = s_values.find(_token.literal_as_string);
+						it != s_values.end())
 						expression.reset_to_rvalue_constant(_token.location, it->second);
 					else // No match found, so rewind to parser state before the identifier was consumed and try parsing it as a normal expression
 						restore();
@@ -2897,7 +2895,7 @@ bool reshadefx::parser::parse_technique_pass(pass_info &info)
 				// Transform identifier to uppercase to do case-insensitive comparison
 				std::transform(_token.literal_as_string.begin(), _token.literal_as_string.end(), _token.literal_as_string.begin(), [](char c) { return static_cast<char>(toupper(c)); });
 
-				static const std::pair<const char *, uint32_t> s_enum_values[] = {
+				static const std::unordered_map<std::string, uint32_t> s_enum_values = {
 					{ "NONE", 0 }, { "ZERO", 0 }, { "ONE", 1 },
 					{ "ADD", uint32_t(pass_blend_op::add) },
 					{ "SUBTRACT", uint32_t(pass_blend_op::subtract) },
@@ -2927,13 +2925,19 @@ bool reshadefx::parser::parse_technique_pass(pass_info &info)
 					{ "LEQUAL", uint32_t(pass_stencil_func::less_equal) }, { "LESSEQUAL", uint32_t(pass_stencil_func::less_equal) },
 					{ "GEQUAL", uint32_t(pass_stencil_func::greater_equal) }, { "GREATEREQUAL", uint32_t(pass_stencil_func::greater_equal) },
 					{ "ALWAYS", uint32_t(pass_stencil_func::always) },
+					{ "POINTS", uint32_t(primitive_topology::point_list) },
+					{ "POINTLIST", uint32_t(primitive_topology::point_list) },
+					{ "LINES", uint32_t(primitive_topology::line_list) },
+					{ "LINELIST", uint32_t(primitive_topology::line_list) },
+					{ "LINESTRIP", uint32_t(primitive_topology::line_strip) },
+					{ "TRIANGLES", uint32_t(primitive_topology::triangle_list) },
+					{ "TRIANGLELIST", uint32_t(primitive_topology::triangle_list) },
+					{ "TRIANGLESTRIP", uint32_t(primitive_topology::triangle_strip) },
 				};
 
 				// Look up identifier in list of possible enumeration names
-				const auto it = std::find_if(std::begin(s_enum_values), std::end(s_enum_values),
-					[this](const auto &it) { return it.first == _token.literal_as_string; });
-
-				if (it != std::end(s_enum_values))
+				if (const auto it = s_enum_values.find(_token.literal_as_string);
+					it != s_enum_values.end())
 					expression.reset_to_rvalue_constant(_token.location, it->second);
 				else // No match found, so rewind to parser state before the identifier was consumed and try parsing it as a normal expression
 					restore();
@@ -2988,6 +2992,8 @@ bool reshadefx::parser::parse_technique_pass(pass_info &info)
 				info.stencil_op_depth_fail = static_cast<pass_stencil_op>(value);
 			else if (state == "VertexCount")
 				info.num_vertices = value;
+			else if (state == "PrimitiveType" || state == "PrimitiveTopology")
+				info.topology = static_cast<primitive_topology>(value);
 			else
 				parse_success = false,
 				error(location, 3004, "unrecognized pass state '" + state + '\'');

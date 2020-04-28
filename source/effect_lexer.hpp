@@ -1,4 +1,4 @@
-/**
+/*
  * Copyright (C) 2014 Patrick Mours. All rights reserved.
  * License: https://github.com/crosire/reshade#license
  */
@@ -22,8 +22,10 @@ namespace reshadefx
 			bool ignore_pp_directives = true,
 			bool ignore_line_directives = false,
 			bool ignore_keywords = false,
-			bool escape_string_literals = true) :
+			bool escape_string_literals = true,
+			const location &start_location = location()) :
 			_input(std::move(input)),
+			_cur_location(start_location),
 			_ignore_comments(ignore_comments),
 			_ignore_whitespace(ignore_whitespace),
 			_ignore_pp_directives(ignore_pp_directives),
@@ -82,7 +84,7 @@ namespace reshadefx
 
 		void parse_identifier(token &tok) const;
 		bool parse_pp_directive(token &tok);
-		void parse_string_literal(token &tok, bool escape) const;
+		void parse_string_literal(token &tok, bool escape);
 		void parse_numeric_literal(token &tok) const;
 
 		std::string _input;

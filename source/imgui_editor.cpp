@@ -1,4 +1,4 @@
-/**
+/*
  * Copyright (C) 2017 BalazsJako
  * Copyright (C) 2018 Patrick Mours
  *
@@ -24,6 +24,7 @@
 #include "imgui_editor.hpp"
 #include "effect_lexer.hpp"
 #include <imgui.h>
+#include <imgui_internal.h>
 
 const char *imgui_code_editor::get_palette_color_name(unsigned int col)
 {
@@ -92,6 +93,7 @@ void imgui_code_editor::render(const char *title, bool border)
 
 	ImGui::BeginChild(title, ImVec2(0, _search_window_open * -bottom_height), border, ImGuiWindowFlags_HorizontalScrollbar | ImGuiWindowFlags_AlwaysHorizontalScrollbar | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoNavInputs);
 	ImGui::PushAllowKeyboardFocus(true);
+	const char *const editor_window_name = ImGui::GetCurrentWindowRead()->Name;
 
 	char buf[128] = "", *buf_end = buf;
 
@@ -120,15 +122,8 @@ void imgui_code_editor::render(const char *title, bool border)
 		io.WantTextInput = true;
 		io.WantCaptureKeyboard = true;
 
-		if (ctrl && !shift && !alt && (ImGui::IsKeyPressed('F') || ImGui::IsKeyPressed('H')))
-		{
-			// Copy currently selected text into search box
-			if (_select_beg != _select_end)
-				_search_text[get_selected_text().copy(_search_text, sizeof(_search_text) - 1)] = '\0';
-
-			_search_window_open = ImGui::IsKeyPressed('H') ? 2 /* search + replace */ : 1 /* search */;
-			_search_window_focus = 2; // Need to focus multiple frames (see https://github.com/ocornut/imgui/issues/343)
-		}
+		if (ImGui::IsKeyPressed(ImGui::GetKeyIndex(ImGuiKey_Escape)))
+			ImGui::SetWindowFocus(nullptr); // Reset window focus
 		else if (ctrl && !shift && !alt && ImGui::IsKeyPressed('Z'))
 			undo();
 		else if (ctrl && !shift && !alt && ImGui::IsKeyPressed('Y'))
@@ -212,7 +207,7 @@ void imgui_code_editor::render(const char *title, bool border)
 
 		const bool is_clicked = ImGui::IsMouseClicked(0);
 		const bool is_double_click = !shift && ImGui::IsMouseDoubleClicked(0);
-		const bool is_triple_click = !shift && is_clicked && !is_double_click && ImGui::GetTime() - _last_click_time < io.MouseDoubleClickTime;
+		const bool is_triple_click = !shift && is_clicked && !is_double_click && (ImGui::GetTime() - _last_click_time) < io.MouseDoubleClickTime;
 
 		if (is_triple_click)
 		{
@@ -474,12 +469,22 @@ void imgui_code_editor::render(const char *title, bool border)
 	ImGui::PopStyleVar();
 	ImGui::PopStyleColor();
 
+	if (ctrl && !shift && !alt && (ImGui::IsKeyPressed('F') || ImGui::IsKeyPressed('H')))
+	{
+		// Copy currently selected text into search box
+		if (_select_beg != _select_end)
+			_search_text[get_selected_text().copy(_search_text, sizeof(_search_text) - 1)] = '\0';
+
+		_search_window_open = ImGui::IsKeyPressed('H') ? 2 /* search + replace */ : 1 /* search */;
+		_search_window_focus = 2; // Need to focus multiple frames (see https://github.com/ocornut/imgui/issues/343)
+	}
+
 	if (_search_window_open)
 	{
 		ImGui::Dummy(ImVec2(0, ImGui::GetStyle().ItemSpacing.y));
 		ImGui::BeginChild("##search", ImVec2(0, 0));
 
-		const float input_width = ImGui::GetContentRegionAvail().x - (3 * button_spacing) - (3 * button_size);
+		const float input_width = ImGui::GetContentRegionAvail().x - (4 * button_spacing) - (4 * button_size) - 5;
 		ImGui::PushItemWidth(input_width);
 		if (ImGui::InputText("##search", _search_text, sizeof(_search_text), ImGuiInputTextFlags_AutoSelectAll | ImGuiInputTextFlags_EnterReturnsTrue | ImGuiInputTextFlags_AllowTabInput))
 		{
@@ -495,14 +500,34 @@ void imgui_code_editor::render(const char *title, bool border)
 		}
 
 		ImGui::SameLine(0.0f, button_spacing);
-		if (ImGui::Button("<", ImVec2(button_size, 0)))
-			find_and_scroll_to_text(_search_text, true);
+		ImGui::PushStyleColor(ImGuiCol_Button, ImGui::GetStyle().Colors[_search_case_sensitive ? ImGuiCol_ButtonActive : ImGuiCol_Button]);
+		if (ImGui::Button("Aa", ImVec2(button_size + 5, 0)) || (!ctrl && !shift && alt && ImGui::IsKeyPressed('C')))
+			_search_case_sensitive = !_search_case_sensitive;
+		ImGui::PopStyleColor();
+		if (ImGui::IsItemHovered())
+			ImGui::SetTooltip("Match case (Alt + C)");
+
 		ImGui::SameLine(0.0f, button_spacing);
-		if (ImGui::Button(">", ImVec2(button_size, 0)))
+		if (ImGui::Button("<", ImVec2(button_size, 0)) || (shift && ImGui::IsKeyPressed(0x72))) // VK_F3
+			find_and_scroll_to_text(_search_text, true);
+		if (ImGui::IsItemHovered())
+			ImGui::SetTooltip("Find previous (Shift + F3)");
+
+		ImGui::SameLine(0.0f, button_spacing);
+		if (ImGui::Button(">", ImVec2(button_size, 0)) || (!shift && ImGui::IsKeyPressed(0x72)))
 			find_and_scroll_to_text(_search_text, false);
+		if (ImGui::IsItemHovered())
+			ImGui::SetTooltip("Find next (F3)");
+
 		ImGui::SameLine(0.0f, button_spacing);
 		if (ImGui::Button("X", ImVec2(button_size, 0)) || ImGui::IsKeyPressed(ImGui::GetKeyIndex(ImGuiKey_Escape)))
+		{
 			_search_window_open = _search_window_focus = 0;
+			// Move focus back to text editor again next frame
+			ImGui::SetWindowFocus(editor_window_name);
+		}
+		if (ImGui::IsItemHovered())
+			ImGui::SetTooltip("Close (Escape)");
 
 		if (_search_window_open != 1)
 		{
@@ -521,14 +546,23 @@ void imgui_code_editor::render(const char *title, bool border)
 				ImGui::SetKeyboardFocusHere(-1);
 			}
 
-			ImGui::SameLine(0.0f, button_spacing);
-			if (ImGui::Button("R", ImVec2(button_size, 0)))
+			ImGui::SameLine(0.0f, button_spacing * 2 + button_size + 5);
+			if (ImGui::Button("Repl", ImVec2(2 * button_size + button_spacing, 0)) || (!ctrl && !shift && alt && ImGui::IsKeyPressed('R')))
 				if (find_and_scroll_to_text(_search_text, false, true))
 					insert_text(_replace_text);
+			if (ImGui::IsItemHovered())
+				ImGui::SetTooltip("Replace next (Alt + R)");
+
 			ImGui::SameLine(0.0f, button_spacing);
-			if (ImGui::Button("A", ImVec2(button_size, 0)))
+			if (ImGui::Button("A", ImVec2(button_size, 0)) || (!ctrl && !shift && alt && ImGui::IsKeyPressed('A')))
+			{
+				// Reset select position so that replace stats at document begin
+				_select_beg = text_pos();
 				while (find_and_scroll_to_text(_search_text, false, true))
 					insert_text(_replace_text);
+			}
+			if (ImGui::IsItemHovered())
+				ImGui::SetTooltip("Replace all (Alt + A)");
 		}
 
 		ImGui::EndChild();
@@ -661,8 +695,8 @@ void imgui_code_editor::insert_character(char c, bool auto_indent)
 			auto &beg = _select_beg;
 			auto &end = _select_end;
 
-			_colorize_line_beg = std::min(_colorize_line_beg, beg.line);
-			_colorize_line_end = std::max(_colorize_line_end, end.line + 1);
+			_colorize_line_beg = std::min(_colorize_line_beg, beg.line - std::min<size_t>(beg.line, 10));
+			_colorize_line_end = std::max(_colorize_line_end, end.line + 10 + 1);
 
 			beg.column = 0;
 			if (end.column == 0 && end.line > 0)
@@ -718,7 +752,8 @@ void imgui_code_editor::insert_character(char c, bool auto_indent)
 	u.added = c;
 	u.added_beg = _cursor_pos;
 
-	_colorize_line_beg = std::min(_colorize_line_beg, _cursor_pos.line);
+	// Colorize additional 10 lines above and below to better catch multi-line constructs
+	_colorize_line_beg = std::min(_colorize_line_beg, _cursor_pos.line - std::min<size_t>(_cursor_pos.line, 10));
 
 	// New line feed requires insertion of a new line
 	if (c == '\n')
@@ -765,7 +800,7 @@ void imgui_code_editor::insert_character(char c, bool auto_indent)
 
 	_scroll_to_cursor = true;
 
-	_colorize_line_end = std::max(_colorize_line_end, _cursor_pos.line + 1);
+	_colorize_line_end = std::max(_colorize_line_end, _cursor_pos.line + 10 + 1);
 }
 
 std::string imgui_code_editor::get_text() const
@@ -927,8 +962,8 @@ void imgui_code_editor::delete_next()
 
 	record_undo(std::move(u));
 
-	_colorize_line_beg = std::min(_colorize_line_beg, _cursor_pos.line);
-	_colorize_line_end = std::max(_colorize_line_end, _cursor_pos.line + 1);
+	_colorize_line_beg = std::min(_colorize_line_beg, _cursor_pos.line - std::min<size_t>(_cursor_pos.line, 10));
+	_colorize_line_end = std::max(_colorize_line_end, _cursor_pos.line + 10 + 1);
 }
 void imgui_code_editor::delete_previous()
 {
@@ -981,8 +1016,8 @@ void imgui_code_editor::delete_previous()
 
 	_scroll_to_cursor = true;
 
-	_colorize_line_beg = std::min(_colorize_line_beg, _cursor_pos.line);
-	_colorize_line_end = std::max(_colorize_line_end, _cursor_pos.line + 1);
+	_colorize_line_beg = std::min(_colorize_line_beg, _cursor_pos.line - std::min<size_t>(_cursor_pos.line, 10));
+	_colorize_line_end = std::max(_colorize_line_end, _cursor_pos.line + 10 + 1);
 }
 void imgui_code_editor::delete_selection()
 {
@@ -1027,8 +1062,8 @@ void imgui_code_editor::delete_selection()
 		assert(!_lines.empty());
 	}
 
-	_colorize_line_beg = std::min(_colorize_line_beg, _select_beg.line);
-	_colorize_line_end = std::max(_colorize_line_end, _select_end.line + 1);
+	_colorize_line_beg = std::min(_colorize_line_beg, _select_beg.line - std::min<size_t>(_cursor_pos.line, 10));
+	_colorize_line_end = std::max(_colorize_line_end, _select_end.line + 10 + 1);
 
 	// Reset selection
 	_cursor_pos = _select_beg;
@@ -1422,6 +1457,10 @@ bool imgui_code_editor::find_and_scroll_to_text(const std::string &text, bool ba
 	if (text.empty())
 		return false; // Cannot search for empty text
 
+	const auto compare_c = [this](char clhs, char crhs) {
+		return _search_case_sensitive ? clhs == crhs : tolower(clhs) == tolower(crhs);
+	};
+
 	// Start search at the cursor position
 	text_pos match_pos_beg, search_pos = backwards != with_selection ? _select_beg : _select_end;
 
@@ -1439,7 +1478,7 @@ bool imgui_code_editor::find_and_scroll_to_text(const std::string &text, bool ba
 
 				while (true)
 				{
-					if (_lines[search_pos.line][search_pos.column].c == text[match_offset])
+					if (compare_c(_lines[search_pos.line][search_pos.column].c, text[match_offset]))
 					{
 						if (match_offset == match_last) // Keep track of end of the match
 							match_pos_beg = search_pos;
@@ -1493,7 +1532,7 @@ bool imgui_code_editor::find_and_scroll_to_text(const std::string &text, bool ba
 
 			while (search_pos.column < _lines[search_pos.line].size())
 			{
-				if (_lines[search_pos.line][search_pos.column].c == text[match_offset])
+				if (compare_c(_lines[search_pos.line][search_pos.column].c, text[match_offset]))
 				{
 					if (match_offset == 0) // Keep track of beginning of the match
 						match_pos_beg = search_pos;
@@ -1537,6 +1576,8 @@ void imgui_code_editor::colorize()
 	_colorize_line_beg = to;
 
 	// Reset coloring range if we have finished coloring it after this iteration
+	if (_colorize_line_end > _lines.size())
+		_colorize_line_end = _lines.size();
 	if (_colorize_line_beg == _colorize_line_end)
 	{
 		_colorize_line_beg = std::numeric_limits<size_t>::max();
@@ -1549,7 +1590,14 @@ void imgui_code_editor::colorize()
 		for (size_t k = 0; k < _lines[l].size(); ++k)
 			input_string.push_back(_lines[l][k].c);
 
-	reshadefx::lexer lexer(input_string, false, true, false, true, false, true);
+	reshadefx::lexer lexer(
+		input_string,
+		false /* ignore_comments */,
+		true  /* ignore_whitespace */,
+		false /* ignore_pp_directives */,
+		true  /* ignore_line_directives */,
+		false /* ignore_keywords */,
+		false /* escape_string_literals */);
 
 	for (reshadefx::token tok; (tok = lexer.lex()).id != reshadefx::tokenid::end_of_file;)
 	{

@@ -1,11 +1,11 @@
-/**
+/*
  * Copyright (C) 2014 Patrick Mours. All rights reserved.
  * License: https://github.com/crosire/reshade#license
  */
 
 #include "dll_log.hpp"
 #include "buffer_detection.hpp"
-#include "../dxgi/format_utils.hpp"
+#include "dxgi/format_utils.hpp"
 #include <cmath>
 
 #if RESHADE_DEPTH
@@ -41,6 +41,8 @@ void reshade::d3d11::buffer_detection_context::reset(bool release_resources)
 	buffer_detection::reset();
 
 #if RESHADE_DEPTH
+	assert(_depthstencil_clear_texture == nullptr || _context == this);
+
 	if (release_resources)
 	{
 		assert(_context == this);
@@ -190,6 +192,8 @@ com_ptr<ID3D11Texture2D> reshade::d3d11::buffer_detection_context::find_best_dep
 
 			if (desc.SampleDesc.Count > 1)
 				continue; // Ignore MSAA textures, since they would need to be resolved first
+
+			assert((desc.BindFlags & D3D11_BIND_SHADER_RESOURCE) != 0);
 
 			if (width != 0 && height != 0)
 			{

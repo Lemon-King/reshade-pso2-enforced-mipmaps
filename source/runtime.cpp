@@ -1,4 +1,4 @@
-/**
+/*
  * Copyright (C) 2014 Patrick Mours. All rights reserved.
  * License: https://github.com/crosire/reshade#license
  */
@@ -96,11 +96,6 @@ reshade::runtime::runtime() :
 	_last_frame_duration(std::chrono::milliseconds(1)),
 	_effect_search_paths({ L".\\" }),
 	_texture_search_paths({ L".\\" }),
-	_global_preprocessor_definitions({
-		"RESHADE_DEPTH_LINEARIZATION_FAR_PLANE=1000.0",
-		"RESHADE_DEPTH_INPUT_IS_UPSIDE_DOWN=0",
-		"RESHADE_DEPTH_INPUT_IS_REVERSED=0",
-		"RESHADE_DEPTH_INPUT_IS_LOGARITHMIC=0" }),
 	_reload_key_data(),
 	_effects_key_data(),
 	_screenshot_key_data(),
@@ -140,7 +135,7 @@ reshade::runtime::~runtime()
 
 bool reshade::runtime::on_init(input::window_handle window)
 {
-	LOG(INFO) << "Recreated runtime environment on runtime " << this << '.';
+	assert(!_is_initialized);
 
 	_input = input::register_window(window);
 
@@ -153,28 +148,28 @@ bool reshade::runtime::on_init(input::window_handle window)
 	_preset_save_success = true;
 	_screenshot_save_success = true;
 
-#if RESHADE_GUI
-	build_font_atlas();
-#endif
+	LOG(INFO) << "Recreated runtime environment on runtime " << this << '.';
 
 	return true;
 }
 void reshade::runtime::on_reset()
 {
-	if (!_is_initialized)
-		return;
+	if (_is_initialized)
+		// Update initialization state immediately, so that any effect loading still in progress can abort early
+		_is_initialized = false;
+	else
+		return; // Nothing to do if the runtime was already destroyed or not successfully initialized in the first place
 
 	unload_effects();
 
+	_width = _height = 0;
 #if RESHADE_GUI
 	if (_imgui_font_atlas != nullptr)
 		destroy_texture(*_imgui_font_atlas);
+	_rebuild_font_atlas = true;
 #endif
 
 	LOG(INFO) << "Destroyed runtime environment on runtime " << this << '.';
-
-	_width = _height = 0;
-	_is_initialized = false;
 }
 void reshade::runtime::on_present()
 {
@@ -196,23 +191,34 @@ void reshade::runtime::on_present()
 	const auto input_lock = _input->lock();
 #endif
 
+#if RESHADE_GUI
+	// Draw overlay
+	draw_ui();
+
+	if (_should_save_screenshot && _screenshot_save_ui && _show_menu)
+		save_screenshot(L" ui");
+#endif
+
+	// All screenshots were created at this point, so reset request
+	_should_save_screenshot = false;
+
 	// Handle keyboard shortcuts
 	if (!_ignore_shortcuts)
 	{
-		if (_input->is_key_pressed(_effects_key_data))
+		if (_input->is_key_pressed(_effects_key_data, _force_shortcut_modifiers))
 			_effects_enabled = !_effects_enabled;
 
-		if (_input->is_key_pressed(_screenshot_key_data))
-			_should_save_screenshot = true; // Notify 'update_and_render_effects' that we want to save a screenshot
+		if (_input->is_key_pressed(_screenshot_key_data, _force_shortcut_modifiers))
+			_should_save_screenshot = true; // Notify 'update_and_render_effects' that we want to save a screenshot next frame
 
 		// Do not allow the next shortcuts while effects are being loaded or compiled (since they affect that state)
 		if (!is_loading() && _reload_compile_queue.empty())
 		{
-			if (_input->is_key_pressed(_reload_key_data))
+			if (_input->is_key_pressed(_reload_key_data, _force_shortcut_modifiers))
 				load_effects();
 
-			if (const bool reversed = _input->is_key_pressed(_prev_preset_key_data);
-				_input->is_key_pressed(_next_preset_key_data) || reversed)
+			if (const bool reversed = _input->is_key_pressed(_prev_preset_key_data, _force_shortcut_modifiers);
+				_input->is_key_pressed(_next_preset_key_data, _force_shortcut_modifiers) || reversed)
 			{
 				// The preset shortcut key was pressed down, so start the transition
 				if (switch_to_next_preset(_current_preset_path.parent_path(), reversed))
@@ -228,14 +234,6 @@ void reshade::runtime::on_present()
 				load_current_preset();
 		}
 	}
-
-#if RESHADE_GUI
-	// Draw overlay
-	draw_ui();
-
-	if (_should_save_screenshot && _screenshot_save_ui)
-		save_screenshot(L" ui");
-#endif
 
 	// Reset input status
 	_input->next_frame();
@@ -311,9 +309,7 @@ bool reshade::runtime::load_effect(const std::filesystem::path &path, size_t ind
 		}
 
 		if (!pp.append_file(path))
-		{
 			effect.compile_sucess = false;
-		}
 
 		unsigned shader_model;
 		if (_renderer_id == 0x9000)     // D3D9
@@ -338,7 +334,7 @@ bool reshade::runtime::load_effect(const std::filesystem::path &path, size_t ind
 		reshadefx::parser parser;
 
 		// Compile the pre-processed source code (try the compile even if the preprocessor step failed to get additional error information)
-		if (!parser.parse(std::move(pp.output()), codegen.get()))
+		if (!parser.parse(std::move(pp.output()), codegen.get()) || !effect.compile_sucess)
 		{
 			LOG(ERROR) << "Failed to compile " << path << ":\n" << pp.errors() << parser.errors();
 			effect.compile_sucess = false;
@@ -452,6 +448,8 @@ bool reshade::runtime::load_effect(const std::filesystem::path &path, size_t ind
 			var.special = special_uniform::mouse_button;
 		else if (special == "freepie")
 			var.special = special_uniform::freepie;
+		else if (special == "overlay_open")
+			var.special = special_uniform::overlay_open;
 		else if (special == "bufready_depth")
 			var.special = special_uniform::bufready_depth;
 
@@ -560,7 +558,7 @@ bool reshade::runtime::load_effect(const std::filesystem::path &path, size_t ind
 
 	return effect.compile_sucess;
 }
-bool reshade::runtime::load_effects()
+void reshade::runtime::load_effects()
 {
 	// Clear out any previous effects
 	unload_effects();
@@ -587,7 +585,7 @@ bool reshade::runtime::load_effects()
 	_reload_remaining_effects = _reload_total_effects;
 
 	if (_reload_total_effects == 0)
-		return true; // No effect files found, so nothing more to do
+		return; // No effect files found, so nothing more to do
 
 	// Allocate space for effects which are placed in this array during the 'load_effect' call
 	_effects.resize(_reload_total_effects);
@@ -599,12 +597,11 @@ bool reshade::runtime::load_effects()
 	// Keep track of the spawned threads, so the runtime cannot be destroyed while they are still running
 	for (size_t n = 0; n < num_splits; ++n)
 		_worker_threads.emplace_back([this, effect_files, num_splits, n]() {
-			for (size_t i = 0; i < effect_files.size(); ++i)
+			// Abort loading when initialization state changes (indicating that 'on_reset' was called in the meantime)
+			for (size_t i = 0; i < effect_files.size() && _is_initialized; ++i)
 				if (i * num_splits / effect_files.size() == n)
 					load_effect(effect_files[i], i);
 		});
-
-	return _last_reload_successful;
 }
 void reshade::runtime::load_textures()
 {
@@ -707,8 +704,7 @@ void reshade::runtime::unload_effect(size_t index)
 void reshade::runtime::unload_effects()
 {
 #if RESHADE_GUI
-	// Force editor to clear text after effects where reloaded
-	open_file_in_code_editor(std::numeric_limits<size_t>::max(), {});
+	_selected_effect = std::numeric_limits<size_t>::max();
 	_preview_texture = nullptr;
 	_effect_filter[0] = '\0'; // And reset filter too, since the list of techniques might have changed
 #endif
@@ -745,6 +741,14 @@ void reshade::runtime::update_and_render_effects()
 
 		// Finished loading effects, so apply preset to figure out which ones need compiling
 		load_current_preset();
+
+#if RESHADE_GUI
+		// Re-open last file in code editor after a reload
+		if (_show_code_editor && !_editor_file.empty())
+			if (const auto it = std::find_if(_effects.begin(), _effects.end(),
+				[this](const effect &fx) { return fx.source_file == _editor_file; }); it != _effects.end())
+				open_file_in_code_editor(it - _effects.begin(), _editor_file);
+#endif
 
 		_last_reload_time = std::chrono::high_resolution_clock::now();
 		_reload_total_effects = 0;
@@ -839,10 +843,7 @@ void reshade::runtime::update_and_render_effects()
 
 	// Nothing to do here if effects are disabled globally
 	if (!_effects_enabled)
-	{
-		_should_save_screenshot = false;
 		return;
-	}
 
 	// Update special uniform variables
 	for (effect &effect : _effects)
@@ -852,7 +853,7 @@ void reshade::runtime::update_and_render_effects()
 
 		for (uniform &variable : effect.uniforms)
 		{
-			if (!_ignore_shortcuts && variable.toggle_key_data[0] != 0 && _input->is_key_pressed(variable.toggle_key_data))
+			if (!_ignore_shortcuts && variable.toggle_key_data[0] != 0 && _input->is_key_pressed(variable.toggle_key_data, _force_shortcut_modifiers))
 			{
 				assert(variable.supports_toggle_key());
 
@@ -1004,6 +1005,11 @@ void reshade::runtime::update_and_render_effects()
 						set_uniform_value(variable, array_values, 4 * 2);
 					}
 					break;
+				case special_uniform::overlay_open:
+#if RESHADE_GUI
+					set_uniform_value(variable, _show_menu);
+#endif
+					break;
 				case special_uniform::bufready_depth:
 					set_uniform_value(variable, _has_depth_texture);
 					break;
@@ -1020,8 +1026,7 @@ void reshade::runtime::update_and_render_effects()
 			if (technique.timeleft <= 0)
 				disable_technique(technique);
 		}
-		else if (!_ignore_shortcuts && (_input->is_key_pressed(technique.toggle_key_data) ||
-			(technique.toggle_key_data[0] >= 0x01 && technique.toggle_key_data[0] <= 0x06 && _input->is_mouse_button_pressed(technique.toggle_key_data[0] - 1))))
+		else if (!_ignore_shortcuts && _input->is_key_pressed(technique.toggle_key_data, _force_shortcut_modifiers))
 		{
 			if (!technique.enabled)
 				enable_technique(technique);
@@ -1040,10 +1045,7 @@ void reshade::runtime::update_and_render_effects()
 	}
 
 	if (_should_save_screenshot)
-	{
 		save_screenshot(std::wstring(), true);
-		_should_save_screenshot = false;
-	}
 }
 
 void reshade::runtime::enable_technique(technique &technique)
@@ -1100,6 +1102,7 @@ void reshade::runtime::load_config()
 	config.get("INPUT", "KeyScreenshot", _screenshot_key_data);
 	config.get("INPUT", "KeyPreviousPreset", _prev_preset_key_data);
 	config.get("INPUT", "KeyNextPreset", _next_preset_key_data);
+	config.get("INPUT", "ForceShortcutModifiers", _force_shortcut_modifiers);
 
 	config.get("GENERAL", "PerformanceMode", _performance_mode);
 	config.get("GENERAL", "EffectSearchPaths", _effect_search_paths);
@@ -1144,6 +1147,7 @@ void reshade::runtime::save_config() const
 	config.set("INPUT", "KeyScreenshot", _screenshot_key_data);
 	config.set("INPUT", "KeyPreviousPreset", _prev_preset_key_data);
 	config.set("INPUT", "KeyNextPreset", _next_preset_key_data);
+	config.set("INPUT", "ForceShortcutModifiers", _force_shortcut_modifiers);
 
 	config.set("GENERAL", "PerformanceMode", _performance_mode);
 	config.set("GENERAL", "EffectSearchPaths", _effect_search_paths);
@@ -1469,7 +1473,7 @@ static inline bool force_floating_point_value(const reshadefx::type &type, uint3
 {
 	if (renderer_id == 0x9000)
 		return true; // All uniform variables are floating-point in D3D9
-	if (type.is_matrix() && renderer_id & 0x10000)
+	if (type.is_matrix() && (renderer_id & 0x10000))
 		return true; // All matrices are floating-point in GLSL
 	return false;
 }
@@ -1511,7 +1515,7 @@ void reshade::runtime::get_uniform_value(const uniform &variable, bool *values, 
 }
 void reshade::runtime::get_uniform_value(const uniform &variable, int32_t *values, size_t count) const
 {
-	if (!variable.type.is_floating_point() && !force_floating_point_value(variable.type, _renderer_id))
+	if (variable.type.is_integral() && !force_floating_point_value(variable.type, _renderer_id))
 	{
 		get_uniform_value(variable, reinterpret_cast<uint8_t *>(values), count * sizeof(int32_t));
 		return;
@@ -1577,68 +1581,67 @@ void reshade::runtime::set_uniform_value(uniform &variable, const uint8_t *data,
 }
 void reshade::runtime::set_uniform_value(uniform &variable, const bool *values, size_t count)
 {
-	const auto data = static_cast<uint8_t *>(alloca(count * 4));
-	switch (force_floating_point_value(variable.type, _renderer_id) ?
-		reshadefx::type::t_float : variable.type.base)
+	if (variable.type.is_floating_point() || force_floating_point_value(variable.type, _renderer_id))
 	{
-	case reshadefx::type::t_bool:
+		const auto data = static_cast<float *>(alloca(count * sizeof(float)));
 		for (size_t i = 0; i < count; ++i)
-			reinterpret_cast<int32_t *>(data)[i] = values[i] ? -1 : 0;
-		break;
-	case reshadefx::type::t_int:
-	case reshadefx::type::t_uint:
-		for (size_t i = 0; i < count; ++i)
-			reinterpret_cast<int32_t *>(data)[i] = values[i] ? 1 : 0;
-		break;
-	case reshadefx::type::t_float:
-		for (size_t i = 0; i < count; ++i)
-			reinterpret_cast<float *>(data)[i] = values[i] ? 1.0f : 0.0f;
-		break;
-	}
+			data[i] = values[i] ? 1.0f : 0.0f;
 
-	set_uniform_value(variable, data, count * 4);
+		set_uniform_value(variable, data, count * sizeof(float));
+	}
+	else
+	{
+		const auto data = static_cast<uint32_t *>(alloca(count * sizeof(uint32_t)));
+		for (size_t i = 0; i < count; ++i)
+			data[i] = values[i] ? 1 : 0;
+
+		set_uniform_value(variable, data, count * sizeof(uint32_t));
+	}
 }
 void reshade::runtime::set_uniform_value(uniform &variable, const int32_t *values, size_t count)
 {
-	if (variable.type.is_integral() && !force_floating_point_value(variable.type, _renderer_id))
+	if (variable.type.is_floating_point() || force_floating_point_value(variable.type, _renderer_id))
 	{
-		set_uniform_value(variable, reinterpret_cast<const uint8_t *>(values), count * sizeof(int));
-		return;
+		const auto data = static_cast<float *>(alloca(count * sizeof(float)));
+		for (size_t i = 0; i < count; ++i)
+			data[i] = static_cast<float>(values[i]);
+
+		set_uniform_value(variable, reinterpret_cast<const uint8_t *>(data), count * sizeof(float));
 	}
-
-	const auto data = static_cast<float *>(alloca(count * sizeof(float)));
-	for (size_t i = 0; i < count; ++i)
-		data[i] = static_cast<float>(values[i]);
-
-	set_uniform_value(variable, reinterpret_cast<const uint8_t *>(data), count * sizeof(float));
+	else
+	{
+		set_uniform_value(variable, reinterpret_cast<const uint8_t *>(values), count * sizeof(int32_t));
+	}
 }
 void reshade::runtime::set_uniform_value(uniform &variable, const uint32_t *values, size_t count)
 {
-	if (variable.type.is_integral() && !force_floating_point_value(variable.type, _renderer_id))
+	if (variable.type.is_floating_point() || force_floating_point_value(variable.type, _renderer_id))
 	{
-		set_uniform_value(variable, reinterpret_cast<const uint8_t *>(values), count * sizeof(int));
-		return;
+		const auto data = static_cast<float *>(alloca(count * sizeof(float)));
+		for (size_t i = 0; i < count; ++i)
+			data[i] = static_cast<float>(values[i]);
+
+		set_uniform_value(variable, reinterpret_cast<const uint8_t *>(data), count * sizeof(float));
 	}
-
-	const auto data = static_cast<float *>(alloca(count * sizeof(float)));
-	for (size_t i = 0; i < count; ++i)
-		data[i] = static_cast<float>(values[i]);
-
-	set_uniform_value(variable, reinterpret_cast<const uint8_t *>(data), count * sizeof(float));
+	else
+	{
+		set_uniform_value(variable, reinterpret_cast<const uint8_t *>(values), count * sizeof(uint32_t));
+	}
 }
 void reshade::runtime::set_uniform_value(uniform &variable, const float *values, size_t count)
 {
 	if (variable.type.is_floating_point() || force_floating_point_value(variable.type, _renderer_id))
 	{
 		set_uniform_value(variable, reinterpret_cast<const uint8_t *>(values), count * sizeof(float));
-		return;
 	}
+	else
+	{
+		const auto data = static_cast<int32_t *>(alloca(count * sizeof(int32_t)));
+		for (size_t i = 0; i < count; ++i)
+			data[i] = static_cast<int32_t>(values[i]);
 
-	const auto data = static_cast<int32_t *>(alloca(count * sizeof(int32_t)));
-	for (size_t i = 0; i < count; ++i)
-		data[i] = static_cast<int32_t>(values[i]);
-
-	set_uniform_value(variable, reinterpret_cast<const uint8_t *>(data), count * sizeof(int32_t));
+		set_uniform_value(variable, reinterpret_cast<const uint8_t *>(data), count * sizeof(int32_t));
+	}
 }
 
 void reshade::runtime::reset_uniform_value(uniform &variable)
