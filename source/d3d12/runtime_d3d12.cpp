@@ -85,9 +85,12 @@ reshade::d3d12::runtime_d3d12::runtime_d3d12(ID3D12Device *device, ID3D12Command
 		if (com_ptr<IDXGIAdapter> dxgi_adapter;
 			SUCCEEDED(factory->EnumAdapterByLuid(luid, IID_PPV_ARGS(&dxgi_adapter))))
 		{
-			DXGI_ADAPTER_DESC desc;
-			if (SUCCEEDED(dxgi_adapter->GetDesc(&desc)))
+			if (DXGI_ADAPTER_DESC desc; SUCCEEDED(dxgi_adapter->GetDesc(&desc)))
+			{
 				_vendor_id = desc.VendorId, _device_id = desc.DeviceId;
+
+				LOG(INFO) << "Running on " << desc.Description;
+			}
 		}
 	}
 
@@ -175,12 +178,18 @@ bool reshade::d3d12::runtime_d3d12::on_init(const DXGI_SWAP_CHAIN_DESC &swap_des
 
 		if (FAILED(_device->CreateDescriptorHeap(&desc, IID_PPV_ARGS(&_backbuffer_rtvs))))
 			return false;
+#ifndef NDEBUG
+		_backbuffer_rtvs->SetName(L"ReShade RTV heap");
+#endif
 	}
 	{   D3D12_DESCRIPTOR_HEAP_DESC desc = { D3D12_DESCRIPTOR_HEAP_TYPE_DSV };
 		desc.NumDescriptors = 1;
 
 		if (FAILED(_device->CreateDescriptorHeap(&desc, IID_PPV_ARGS(&_depthstencil_dsvs))))
 			return false;
+#ifndef NDEBUG
+		_depthstencil_dsvs->SetName(L"ReShade DSV heap");
+#endif
 	}
 
 	// Get back buffer textures
@@ -590,6 +599,9 @@ bool reshade::d3d12::runtime_d3d12::init_effect(size_t index)
 
 		if (FAILED(_device->CreateDescriptorHeap(&desc, IID_PPV_ARGS(&effect_data.srv_heap))))
 			return false;
+#ifndef NDEBUG
+		effect_data.srv_heap->SetName(L"ReShade effect SRV heap");
+#endif
 
 		effect_data.srv_cpu_base = effect_data.srv_heap->GetCPUDescriptorHandleForHeapStart();
 		effect_data.srv_gpu_base = effect_data.srv_heap->GetGPUDescriptorHandleForHeapStart();
@@ -601,6 +613,9 @@ bool reshade::d3d12::runtime_d3d12::init_effect(size_t index)
 
 		if (FAILED(_device->CreateDescriptorHeap(&desc, IID_PPV_ARGS(&effect_data.rtv_heap))))
 			return false;
+#ifndef NDEBUG
+		effect_data.rtv_heap->SetName(L"ReShade effect RTV heap");
+#endif
 
 		effect_data.rtv_cpu_base = effect_data.rtv_heap->GetCPUDescriptorHandleForHeapStart();
 	}
@@ -611,6 +626,9 @@ bool reshade::d3d12::runtime_d3d12::init_effect(size_t index)
 
 		if (FAILED(_device->CreateDescriptorHeap(&desc, IID_PPV_ARGS(&effect_data.sampler_heap))))
 			return false;
+#ifndef NDEBUG
+		effect_data.sampler_heap->SetName(L"ReShade effect sampler heap");
+#endif
 
 		effect_data.sampler_cpu_base = effect_data.sampler_heap->GetCPUDescriptorHandleForHeapStart();
 		effect_data.sampler_gpu_base = effect_data.sampler_heap->GetGPUDescriptorHandleForHeapStart();
@@ -1010,6 +1028,10 @@ bool reshade::d3d12::runtime_d3d12::init_texture(texture &texture)
 
 		if (FAILED(_device->CreateDescriptorHeap(&heap_desc, IID_PPV_ARGS(&impl->descriptors))))
 			return false;
+#ifndef NDEBUG
+		debug_name += L" SRV heap";
+		impl->descriptors->SetName(debug_name.c_str());
+#endif
 	}
 
 	D3D12_CPU_DESCRIPTOR_HANDLE srv_cpu_handle = impl->descriptors->GetCPUDescriptorHandleForHeapStart();
@@ -1126,6 +1148,9 @@ void reshade::d3d12::runtime_d3d12::upload_texture(const texture &texture, const
 }
 void reshade::d3d12::runtime_d3d12::destroy_texture(texture &texture)
 {
+	// Make sure texture is not still in use before destroying it
+	wait_for_command_queue();
+
 	delete static_cast<d3d12_tex_data *>(texture.impl);
 	texture.impl = nullptr;
 }
@@ -1690,7 +1715,7 @@ void reshade::d3d12::runtime_d3d12::update_depth_texture_bindings(com_ptr<ID3D12
 	else
 	{
 		// Need to provide a description so descriptor type can be determined
-		// See https://docs.microsoft.com/en-us/windows/win32/api/d3d12/nf-d3d12-id3d12device-createshaderresourceview
+		// See https://docs.microsoft.com/windows/win32/api/d3d12/nf-d3d12-id3d12device-createshaderresourceview
 		view_desc.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
 		view_desc.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
 		view_desc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;

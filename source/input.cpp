@@ -123,8 +123,10 @@ bool reshade::input::handle_window_message(const void *message_data)
 	if (input_window == s_windows.end())
 		return false;
 
-	RAWINPUT raw_data = {};
 	const std::shared_ptr<input> input = input_window->second.lock();
+	// It may happen that the input was destroyed between the removal of expired entries above and here, so need to abort in this case
+	if (input == nullptr)
+		return false;
 
 	// At this point we have a shared pointer to the input object and no longer reference any memory from the windows list, so can release the lock
 	lock.unlock();
@@ -141,6 +143,7 @@ bool reshade::input::handle_window_message(const void *message_data)
 	switch (details.message)
 	{
 	case WM_INPUT:
+		RAWINPUT raw_data;
 		if (UINT raw_data_size = sizeof(raw_data);
 			GET_RAWINPUT_CODE_WPARAM(details.wParam) != RIM_INPUT || // Ignore all input sink messages (when window is not focused)
 			GetRawInputData(reinterpret_cast<HRAWINPUT>(details.lParam), RID_INPUT, &raw_data, &raw_data_size, sizeof(raw_data.header)) == UINT(-1))
@@ -181,17 +184,22 @@ bool reshade::input::handle_window_message(const void *message_data)
 			break;
 		case RIM_TYPEKEYBOARD:
 			is_keyboard_message = true;
+			// Do not block key up messages if the key down one was not blocked previously
+			if (input->_block_keyboard && (raw_data.data.keyboard.Flags & RI_KEY_BREAK) != 0 && raw_data.data.keyboard.VKey < 0xFF && (input->_keys[raw_data.data.keyboard.VKey] & 0x04) == 0)
+				is_keyboard_message = false;
 
 			if (raw_input_window == s_raw_input_windows.end() || (raw_input_window->second & 0x1) == 0)
 				break; // Input is already handled by 'WM_KEYDOWN' and friends (since legacy keyboard messages are enabled), so nothing to do here
 
-			if (raw_data.data.keyboard.VKey != 0xFF)
+			// Filter out prefix messages without a key code
+			if (raw_data.data.keyboard.VKey < 0xFF)
 				input->_keys[raw_data.data.keyboard.VKey] = (raw_data.data.keyboard.Flags & RI_KEY_BREAK) == 0 ? 0x88 : 0x08,
 				input->_keys_time[raw_data.data.keyboard.VKey] = details.time;
 
 			// No 'WM_CHAR' messages are sent if legacy keyboard messages are disabled, so need to generate text input manually here
-			// Cannot use the ToAscii function always as it seems to reset dead key state and thus calling it can break subsequent application input, should be fine here though since the application is already explicitly using raw input
-			if (WORD ch = 0; (raw_data.data.keyboard.Flags & RI_KEY_BREAK) == 0 && ToAscii(raw_data.data.keyboard.VKey, raw_data.data.keyboard.MakeCode, input->_keys, &ch, 0))
+			// Cannot use the ToUnicode function always as it seems to reset dead key state and thus calling it can break subsequent application input, should be fine here though since the application is already explicitly using raw input
+			// Since Windows 10 version 1607 this supports the 0x2 flag, which prevents the keyboard state from being changed, so it is not a problem there anymore either way
+			if (WCHAR ch[3] = {}; (raw_data.data.keyboard.Flags & RI_KEY_BREAK) == 0 && ToUnicode(raw_data.data.keyboard.VKey, raw_data.data.keyboard.MakeCode, input->_keys, ch, 2, 0x2))
 				input->_text_input += ch;
 			break;
 		}
@@ -204,10 +212,15 @@ bool reshade::input::handle_window_message(const void *message_data)
 		assert(details.wParam < ARRAYSIZE(input->_keys));
 		input->_keys[details.wParam] = 0x88;
 		input->_keys_time[details.wParam] = details.time;
+		if (input->_block_keyboard)
+			input->_keys[details.wParam] |= 0x04;
 		break;
 	case WM_KEYUP:
 	case WM_SYSKEYUP:
 		assert(details.wParam < ARRAYSIZE(input->_keys));
+		// Do not block key up messages if the key down one was not blocked previously (so key does not get stuck for the application)
+		if (input->_block_keyboard && (input->_keys[details.wParam] & 0x04) == 0)
+			is_keyboard_message = false;
 		input->_keys[details.wParam] = 0x08;
 		input->_keys_time[details.wParam] = details.time;
 		break;
@@ -339,33 +352,23 @@ bool reshade::input::is_any_mouse_button_released() const
 	return false;
 }
 
-void reshade::input::block_mouse_input(bool enable)
-{
-	_block_mouse = enable;
-
-	// Some applications clip the mouse cursor, so disable that while we want full control over mouse input
-	if (enable)
-		ClipCursor(nullptr);
-}
-void reshade::input::block_keyboard_input(bool enable)
-{
-	_block_keyboard = enable;
-}
-
 void reshade::input::next_frame()
 {
 	_frame_count++;
 
 	for (auto &state : _keys)
-		state &= ~0x8;
+		state &= ~0x08;
 
-	// Reset any pressed down key states that have not been updated for more than 5 seconds
+	// Reset any pressed down key states (apart from mouse buttons) that have not been updated for more than 5 seconds
+	// Do not check mouse buttons here, since 'GetAsyncKeyState' always returns the state of the physical mouse buttons, not the logical ones in case they were remapped
+	// See also https://docs.microsoft.com/windows/win32/api/winuser/nf-winuser-getasynckeystate
+	// And time is not tracked for mouse buttons anyway
 	const DWORD time = GetTickCount();
-	for (unsigned int i = 0; i < 256; ++i)
+	for (unsigned int i = 8; i < 256; ++i)
 		if ((_keys[i] & 0x80) != 0 &&
 			(time - _keys_time[i]) > 5000 &&
 			(GetAsyncKeyState(i) & 0x8000) == 0)
-			_keys[i] = 0x08;
+			(_keys[i] = 0x08);
 
 	_text_input.clear();
 	_mouse_wheel_delta = 0;
@@ -378,13 +381,13 @@ void reshade::input::next_frame()
 	// Update modifier key state
 	if ((_keys[VK_MENU] & 0x88) != 0 &&
 		(GetKeyState(VK_MENU) & 0x8000) == 0)
-		_keys[VK_MENU] = 0x08;
+		(_keys[VK_MENU] = 0x08);
 
 	// Update print screen state (there is no key down message, but the key up one is received via the message queue)
 	if ((_keys[VK_SNAPSHOT] & 0x80) == 0 &&
 		(GetAsyncKeyState(VK_SNAPSHOT) & 0x8000) != 0)
-		_keys[VK_SNAPSHOT] = 0x88,
-		_keys_time[VK_SNAPSHOT] = time;
+		(_keys[VK_SNAPSHOT] = 0x88),
+		(_keys_time[VK_SNAPSHOT] = time);
 }
 
 std::string reshade::input::key_name(unsigned int keycode)
@@ -586,6 +589,16 @@ HOOK_EXPORT BOOL WINAPI HookRegisterRawInputDevices(PCRAWINPUTDEVICE pRawInputDe
 }
 
 static POINT last_cursor_position = {};
+
+HOOK_EXPORT BOOL WINAPI HookClipCursor(const RECT *lpRect)
+{
+	if (is_blocking_mouse_input())
+		// Some applications clip the mouse cursor, so disable that while we want full control over mouse input
+		lpRect = nullptr;
+
+	static const auto trampoline = reshade::hooks::call(HookClipCursor);
+	return trampoline(lpRect);
+}
 
 HOOK_EXPORT BOOL WINAPI HookSetCursorPosition(int X, int Y)
 {
