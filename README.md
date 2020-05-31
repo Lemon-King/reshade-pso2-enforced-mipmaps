@@ -5,6 +5,8 @@ This is a modification of [ReShade](https://reshade.me/) for Phantasy Star Onlin
 
 Configuation can be found under a new tab in Reshade's UI.
 
+![New PSO2 Settings](https://i.imgur.com/6v7hhza.png)
+
 ![Texture Filtering Comparison](https://i.imgur.com/Rl2fFVa.jpg)
 
 ## Installation
