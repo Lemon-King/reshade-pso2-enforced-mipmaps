@@ -11,7 +11,7 @@ Configuation can be found under a new tab in Reshade's UI.
 
 ## Installation
 1. Install Reshade into pso2_bin.
-2. Copy the PSO2 modified d3d9.dll over the existing d3d9.dll from Reshade.
+2. Extract and Copy the modified reshade d3d9.dll over the existing d3d9.dll from Reshade.
 
 
 ReShade
