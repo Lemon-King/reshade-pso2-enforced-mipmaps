@@ -6,7 +6,8 @@ This is a modification of [ReShade](https://reshade.me/) for Phantasy Star Onlin
 Configuation can be found under a new tab in Reshade's UI.
 
 ![Settings](https://i.imgur.com/9hjYAuD.png)
-This is an old image, ignore the part about Render Level 5/6 as there was a bug on PSO2 JP where the engine wasn't using any mipmaps on Render Level 6. This bug is fixed on the NA Client.
+
+*This is an old image, ignore the part about Render Level 5/6 as there was a bug on PSO2 JP where the engine wasn't using any mipmaps on Render Level 6. This bug is fixed on the NA Client.*
 
 ![Texture Filtering Comparison](https://i.imgur.com/Rl2fFVa.jpg)
 
