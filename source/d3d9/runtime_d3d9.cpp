@@ -1287,7 +1287,9 @@ void reshade::d3d9::runtime_d3d9::update_depth_texture_bindings(com_ptr<IDirect3
 void reshade::d3d9::runtime_d3d9::draw_pso2_override_menu()
 {
 	ImGui::TextColored(ImColor(204, 204, 0), "Some settings will require a restart of Phantasy Star Online 2.");
-
+#if RESHADE_DEPTH
+	ImGui::TextColored(ImColor(225, 225, 225), "Depth Buffer: Enabled");
+#endif
 	ImGui::Spacing();
 
 	if (ImGui::CollapsingHeader("Texture Detail", ImGuiTreeNodeFlags_DefaultOpen))
