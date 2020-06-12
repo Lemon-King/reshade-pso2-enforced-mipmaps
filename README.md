@@ -10,8 +10,8 @@ Configuation can be found under a new tab in Reshade's UI.
 ![Texture Filtering Comparison](https://i.imgur.com/Rl2fFVa.jpg)
 
 ## Installation
-1. Install Reshade into pso2_bin.
-2. Extract and Copy the modified reshade d3d9.dll over the existing d3d9.dll from Reshade.
+1. [Download](https://reshade.me/) and Install Reshade into pso2_bin.
+2. [Download the Modified PSO2 Reshade from Releases](https://github.com/Lemon-King/reshade-pso2-enforced-mipmaps/releases) and Extract and Copy the modified reshade d3d9.dll over the existing d3d9.dll from Reshade.
 
 
 ReShade
