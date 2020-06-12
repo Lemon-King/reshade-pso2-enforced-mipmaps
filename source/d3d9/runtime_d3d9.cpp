@@ -1304,7 +1304,7 @@ void reshade::d3d9::runtime_d3d9::draw_pso2_override_menu()
 			"Potato"
 		};
 
-		ImGui::TextColored(ImColor(225, 225, 225), "Texture Quality");
+		ImGui::TextColored(ImColor(225, 225, 225), "Texture Bias");
 		_pso2_override_needs_save |= ImGui::Combo(" ", (int*)&_texture_bias, texture_bias_levels, IM_ARRAYSIZE(texture_bias_levels), IM_ARRAYSIZE(texture_bias_levels));
 
 		ImGui::Spacing();
