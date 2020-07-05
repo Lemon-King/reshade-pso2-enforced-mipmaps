@@ -8,21 +8,20 @@
 #include "d3d9_swapchain.hpp"
 #include "runtime_d3d9.hpp"
 
-extern void dump_present_parameters(const D3DPRESENT_PARAMETERS &pp);
+extern void dump_and_modify_present_parameters(D3DPRESENT_PARAMETERS &pp, IDirect3D9 *d3d, UINT adapter_index);
+extern void dump_and_modify_present_parameters(D3DPRESENT_PARAMETERS &pp, D3DDISPLAYMODEEX &fullscreen_desc, IDirect3D9Ex *d3d, UINT adapter_index);
 
-Direct3DDevice9::Direct3DDevice9(IDirect3DDevice9   *original, IDirect3DSwapChain9 *implicit_swapchain, const std::shared_ptr<reshade::d3d9::runtime_d3d9> &runtime, bool use_software_rendering) :
+Direct3DDevice9::Direct3DDevice9(IDirect3DDevice9   *original, bool use_software_rendering) :
 	_orig(original),
 	_extended_interface(0),
 	_use_software_rendering(use_software_rendering),
-	_implicit_swapchain(new Direct3DSwapChain9(this, implicit_swapchain, runtime)),
 	_buffer_detection(original) {
 	assert(_orig != nullptr);
 }
-Direct3DDevice9::Direct3DDevice9(IDirect3DDevice9Ex *original, IDirect3DSwapChain9 *implicit_swapchain, const std::shared_ptr<reshade::d3d9::runtime_d3d9> &runtime, bool use_software_rendering) :
+Direct3DDevice9::Direct3DDevice9(IDirect3DDevice9Ex *original, bool use_software_rendering) :
 	_orig(original),
 	_extended_interface(1),
 	_use_software_rendering(use_software_rendering),
-	_implicit_swapchain(new Direct3DSwapChain9(this, implicit_swapchain, runtime)),
 	_buffer_detection(original) {
 	assert(_orig != nullptr);
 }
@@ -147,9 +146,22 @@ HRESULT STDMETHODCALLTYPE Direct3DDevice9::CreateAdditionalSwapChain(D3DPRESENT_
 	if (pPresentationParameters == nullptr)
 		return D3DERR_INVALIDCALL;
 
-	dump_present_parameters(*pPresentationParameters);
+	com_ptr<IDirect3D9> d3d;
+	_orig->GetDirect3D(&d3d);
+	D3DDEVICE_CREATION_PARAMETERS cp = {};
+	_orig->GetCreationParameters(&cp);
 
-	const HRESULT hr = _orig->CreateAdditionalSwapChain(pPresentationParameters, ppSwapChain);
+	D3DPRESENT_PARAMETERS pp = *pPresentationParameters;
+	dump_and_modify_present_parameters(pp, d3d.get(), cp.AdapterOrdinal);
+	d3d.reset();
+
+	const HRESULT hr = _orig->CreateAdditionalSwapChain(&pp, ppSwapChain);
+	// Update output values (see https://docs.microsoft.com/windows/win32/api/d3d9/nf-d3d9-idirect3ddevice9-createadditionalswapchain)
+	pPresentationParameters->BackBufferWidth = pp.BackBufferWidth;
+	pPresentationParameters->BackBufferHeight = pp.BackBufferHeight;
+	pPresentationParameters->BackBufferFormat = pp.BackBufferFormat;
+	pPresentationParameters->BackBufferCount = pp.BackBufferCount;
+
 	if (FAILED(hr))
 	{
 		LOG(WARN) << "IDirect3DDevice9::CreateAdditionalSwapChain failed with error code " << hr << '!';
@@ -160,14 +172,13 @@ HRESULT STDMETHODCALLTYPE Direct3DDevice9::CreateAdditionalSwapChain(D3DPRESENT_
 	IDirect3DSwapChain9 *const swapchain = *ppSwapChain;
 	assert(swapchain != nullptr);
 
-	D3DPRESENT_PARAMETERS pp;
+	// Retrieve present parameters here again, to get correct values for 'BackBufferWidth' and 'BackBufferHeight'
+	// They may otherwise still be set to zero (which is valid for creation)
 	swapchain->GetPresentParameters(&pp);
 
-	const auto runtime = std::make_shared<reshade::d3d9::runtime_d3d9>(device, swapchain);
+	const auto runtime = std::make_shared<reshade::d3d9::runtime_d3d9>(device, swapchain, &_buffer_detection);
 	if (!runtime->on_init(pp))
 		LOG(ERROR) << "Failed to initialize Direct3D 9 runtime environment on runtime " << runtime.get() << '.';
-
-	runtime->_buffer_detection = &_buffer_detection;
 
 	AddRef(); // Add reference which is released when the swap chain is destroyed (see 'Direct3DSwapChain9::Release')
 
@@ -208,7 +219,14 @@ HRESULT STDMETHODCALLTYPE Direct3DDevice9::Reset(D3DPRESENT_PARAMETERS *pPresent
 	if (pPresentationParameters == nullptr)
 		return D3DERR_INVALIDCALL;
 
-	dump_present_parameters(*pPresentationParameters);
+	com_ptr<IDirect3D9> d3d;
+	_orig->GetDirect3D(&d3d);
+	D3DDEVICE_CREATION_PARAMETERS cp = {};
+	_orig->GetCreationParameters(&cp);
+
+	D3DPRESENT_PARAMETERS pp = *pPresentationParameters;
+	dump_and_modify_present_parameters(pp, d3d.get(), cp.AdapterOrdinal);
+	d3d.reset();
 
 	const auto runtime = _implicit_swapchain->_runtime;
 	runtime->on_reset();
@@ -216,14 +234,19 @@ HRESULT STDMETHODCALLTYPE Direct3DDevice9::Reset(D3DPRESENT_PARAMETERS *pPresent
 	_buffer_detection.reset(true);
 	_auto_depthstencil.reset();
 
-	const HRESULT hr = _orig->Reset(pPresentationParameters);
+	const HRESULT hr = _orig->Reset(&pp);
+	// Update output values (see https://docs.microsoft.com/windows/win32/api/d3d9/nf-d3d9-idirect3ddevice9-reset)
+	pPresentationParameters->BackBufferWidth = pp.BackBufferWidth;
+	pPresentationParameters->BackBufferHeight = pp.BackBufferHeight;
+	pPresentationParameters->BackBufferFormat = pp.BackBufferFormat;
+	pPresentationParameters->BackBufferCount = pp.BackBufferCount;
+
 	if (FAILED(hr))
 	{
 		LOG(ERROR) << "IDirect3DDevice9::Reset failed with error code " << hr << '!';
 		return hr;
 	}
 
-	D3DPRESENT_PARAMETERS pp;
 	_implicit_swapchain->GetPresentParameters(&pp);
 
 	if (!runtime->on_init(pp))
@@ -240,7 +263,9 @@ HRESULT STDMETHODCALLTYPE Direct3DDevice9::Reset(D3DPRESENT_PARAMETERS *pPresent
 }
 HRESULT STDMETHODCALLTYPE Direct3DDevice9::Present(const RECT *pSourceRect, const RECT *pDestRect, HWND hDestWindowOverride, const RGNDATA *pDirtyRegion)
 {
-	_implicit_swapchain->_runtime->on_present();
+	// Only call into runtime if the entire surface is presented, to avoid partial updates messing up effects and the GUI
+	if (pSourceRect == nullptr)
+		_implicit_swapchain->_runtime->on_present();
 	_buffer_detection.reset(false);
 
 	return _orig->Present(pSourceRect, pDestRect, hDestWindowOverride, pDirtyRegion);
@@ -767,7 +792,8 @@ HRESULT STDMETHODCALLTYPE Direct3DDevice9::ComposeRects(IDirect3DSurface9 *pSrc,
 }
 HRESULT STDMETHODCALLTYPE Direct3DDevice9::PresentEx(const RECT *pSourceRect, const RECT *pDestRect, HWND hDestWindowOverride, const RGNDATA *pDirtyRegion, DWORD dwFlags)
 {
-	_implicit_swapchain->_runtime->on_present();
+	if (pSourceRect == nullptr)
+		_implicit_swapchain->_runtime->on_present();
 	_buffer_detection.reset(false);
 
 	assert(_extended_interface);
@@ -839,7 +865,20 @@ HRESULT STDMETHODCALLTYPE Direct3DDevice9::ResetEx(D3DPRESENT_PARAMETERS *pPrese
 	if (pPresentationParameters == nullptr)
 		return D3DERR_INVALIDCALL;
 
-	dump_present_parameters(*pPresentationParameters);
+	com_ptr<IDirect3D9> d3d;
+	_orig->GetDirect3D(&d3d);
+	com_ptr<IDirect3D9Ex> d3dex;
+	d3d->QueryInterface(IID_PPV_ARGS(&d3dex));
+	D3DDEVICE_CREATION_PARAMETERS cp = {};
+	_orig->GetCreationParameters(&cp);
+
+	D3DPRESENT_PARAMETERS pp = *pPresentationParameters;
+	D3DDISPLAYMODEEX fullscreen_mode = { sizeof(fullscreen_mode) };
+	if (pFullscreenDisplayMode != nullptr)
+		fullscreen_mode = *pFullscreenDisplayMode;
+	dump_and_modify_present_parameters(pp, fullscreen_mode, d3dex.get(), cp.AdapterOrdinal);
+	d3d.reset();
+	d3dex.reset();
 
 	const auto runtime = _implicit_swapchain->_runtime;
 	runtime->on_reset();
@@ -848,14 +887,18 @@ HRESULT STDMETHODCALLTYPE Direct3DDevice9::ResetEx(D3DPRESENT_PARAMETERS *pPrese
 	_auto_depthstencil.reset();
 
 	assert(_extended_interface);
-	const HRESULT hr = static_cast<IDirect3DDevice9Ex *>(_orig)->ResetEx(pPresentationParameters, pFullscreenDisplayMode);
+	const HRESULT hr = static_cast<IDirect3DDevice9Ex *>(_orig)->ResetEx(&pp, pp.Windowed ? nullptr : &fullscreen_mode);
+	pPresentationParameters->BackBufferWidth = pp.BackBufferWidth;
+	pPresentationParameters->BackBufferHeight = pp.BackBufferHeight;
+	pPresentationParameters->BackBufferFormat = pp.BackBufferFormat;
+	pPresentationParameters->BackBufferCount = pp.BackBufferCount;
+
 	if (FAILED(hr))
 	{
 		LOG(ERROR) << "IDirect3DDevice9Ex::ResetEx failed with error code " << hr << '!';
 		return hr;
 	}
 
-	D3DPRESENT_PARAMETERS pp;
 	_implicit_swapchain->GetPresentParameters(&pp);
 
 	if (!runtime->on_init(pp))

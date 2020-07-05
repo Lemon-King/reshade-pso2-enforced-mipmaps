@@ -15,6 +15,7 @@
 #include "d3d12/d3d12_device.hpp"
 #include "d3d12/d3d12_command_queue.hpp"
 #include "d3d12/runtime_d3d12.hpp"
+#include "runtime_config.hpp"
 #include <CoreWindow.h>
 
 // Use this to filter out internal device created by the DXGI runtime in the D3D device creation hooks 
@@ -38,7 +39,7 @@ static void dump_sample_desc(const DXGI_SAMPLE_DESC &desc)
 	}
 }
 
-static void dump_swapchain_desc(const DXGI_SWAP_CHAIN_DESC &desc)
+static void dump_and_modify_swapchain_desc(DXGI_SWAP_CHAIN_DESC &desc)
 {
 	LOG(INFO) << "> Dumping swap chain description:";
 	LOG(INFO) << "  +-----------------------------------------+-----------------------------------------+";
@@ -58,8 +59,36 @@ static void dump_swapchain_desc(const DXGI_SWAP_CHAIN_DESC &desc)
 	LOG(INFO) << "  | SwapEffect                              | " << std::setw(39) << desc.SwapEffect   << " |";
 	LOG(INFO) << "  | Flags                                   | " << std::setw(39) << std::hex << desc.Flags << std::dec << " |";
 	LOG(INFO) << "  +-----------------------------------------+-----------------------------------------+";
+
+	{ const reshade::ini_file config(g_reshade_config_path);
+
+		if (bool force_windowed;
+			config.get("APP", "ForceWindowed", force_windowed) && force_windowed)
+		{
+			desc.Windowed = TRUE;
+		}
+
+		if (bool force_fullscreen;
+			config.get("APP", "ForceFullscreen", force_fullscreen) && force_fullscreen)
+		{
+			desc.Windowed = FALSE;
+		}
+
+		if (unsigned int force_resolution[2];
+			config.get("APP", "ForceResolution", force_resolution) && force_resolution[0] != 0 && force_resolution[1] != 0)
+		{
+			desc.BufferDesc.Width = force_resolution[0];
+			desc.BufferDesc.Height = force_resolution[1];
+		}
+
+		if (bool force_10_bit_format;
+			config.get("APP", "Force10BitFormat", force_10_bit_format) && force_10_bit_format)
+		{
+			desc.BufferDesc.Format = DXGI_FORMAT_R10G10B10A2_UNORM;
+		}
+	}
 }
-static void dump_swapchain_desc(const DXGI_SWAP_CHAIN_DESC1 &desc)
+static void dump_and_modify_swapchain_desc(DXGI_SWAP_CHAIN_DESC1 &desc, DXGI_SWAP_CHAIN_FULLSCREEN_DESC &fullscreen_desc)
 {
 	LOG(INFO) << "> Dumping swap chain description:";
 	LOG(INFO) << "  +-----------------------------------------+-----------------------------------------+";
@@ -67,19 +96,50 @@ static void dump_swapchain_desc(const DXGI_SWAP_CHAIN_DESC1 &desc)
 	LOG(INFO) << "  +-----------------------------------------+-----------------------------------------+";
 	LOG(INFO) << "  | Width                                   | " << std::setw(39) << desc.Width   << " |";
 	LOG(INFO) << "  | Height                                  | " << std::setw(39) << desc.Height  << " |";
+	LOG(INFO) << "  | RefreshRate                             | " << std::setw(19) << fullscreen_desc.RefreshRate.Numerator << ' ' << std::setw(19) << fullscreen_desc.RefreshRate.Denominator << " |";
 	LOG(INFO) << "  | Format                                  | " << std::setw(39) << desc.Format  << " |";
 	LOG(INFO) << "  | Stereo                                  | " << std::setw(39) << (desc.Stereo ? "TRUE" : "FALSE") << " |";
+	LOG(INFO) << "  | ScanlineOrdering                        | " << std::setw(39) << fullscreen_desc.ScanlineOrdering << " |";
+	LOG(INFO) << "  | Scaling                                 | " << std::setw(39) << fullscreen_desc.Scaling << " |";
 	dump_sample_desc(desc.SampleDesc);
 	LOG(INFO) << "  | BufferUsage                             | " << std::setw(39) << desc.BufferUsage << " |";
 	LOG(INFO) << "  | BufferCount                             | " << std::setw(39) << desc.BufferCount << " |";
-	LOG(INFO) << "  | Scaling                                 | " << std::setw(39) << desc.Scaling     << " |";
+	LOG(INFO) << "  | Windowed                                | " << std::setw(39) << (fullscreen_desc.Windowed ? "TRUE" : "FALSE") << " |";
 	LOG(INFO) << "  | SwapEffect                              | " << std::setw(39) << desc.SwapEffect  << " |";
 	LOG(INFO) << "  | AlphaMode                               | " << std::setw(39) << desc.AlphaMode   << " |";
 	LOG(INFO) << "  | Flags                                   | " << std::setw(39) << std::hex << desc.Flags << std::dec << " |";
 	LOG(INFO) << "  +-----------------------------------------+-----------------------------------------+";
+
+	{ const reshade::ini_file config(g_reshade_config_path);
+
+		if (bool force_windowed;
+			config.get("APP", "ForceWindowed", force_windowed) && force_windowed)
+		{
+			fullscreen_desc.Windowed = TRUE;
+		}
+
+		if (bool force_fullscreen;
+			config.get("APP", "ForceFullscreen", force_fullscreen) && force_fullscreen)
+		{
+			fullscreen_desc.Windowed = FALSE;
+		}
+
+		if (unsigned int force_resolution[2];
+			config.get("APP", "ForceResolution", force_resolution) && force_resolution[0] != 0 && force_resolution[1] != 0)
+		{
+			desc.Width = force_resolution[0];
+			desc.Height = force_resolution[1];
+		}
+
+		if (bool force_10_bit_format;
+			config.get("APP", "Force10BitFormat", force_10_bit_format) && force_10_bit_format)
+		{
+			desc.Format = DXGI_FORMAT_R10G10B10A2_UNORM;
+		}
+	}
 }
 
-static unsigned int query_device(IUnknown *&device, com_ptr<IUnknown> &device_proxy)
+UINT query_device(IUnknown *&device, com_ptr<IUnknown> &device_proxy)
 {
 	if (com_ptr<D3D10Device> device_d3d10; SUCCEEDED(device->QueryInterface(&device_d3d10)))
 	{
@@ -105,7 +165,7 @@ static unsigned int query_device(IUnknown *&device, com_ptr<IUnknown> &device_pr
 }
 
 template <typename T>
-static void init_reshade_runtime_d3d(T *&swapchain, unsigned int direct3d_version, const com_ptr<IUnknown> &device_proxy, HWND hwnd = nullptr)
+static void init_reshade_runtime_d3d(T *&swapchain, UINT direct3d_version, const com_ptr<IUnknown> &device_proxy, HWND hwnd = nullptr)
 {
 	DXGI_SWAP_CHAIN_DESC desc;
 	if (FAILED(swapchain->GetDesc(&desc)))
@@ -121,11 +181,9 @@ static void init_reshade_runtime_d3d(T *&swapchain, unsigned int direct3d_versio
 	{
 		const com_ptr<D3D10Device> &device = reinterpret_cast<const com_ptr<D3D10Device> &>(device_proxy);
 
-		auto runtime = std::make_unique<reshade::d3d10::runtime_d3d10>(device->_orig, swapchain);
+		auto runtime = std::make_unique<reshade::d3d10::runtime_d3d10>(device->_orig, swapchain, &device->_buffer_detection);
 		if (!runtime->on_init(desc))
 			LOG(ERROR) << "Failed to initialize Direct3D 10 runtime environment on runtime " << runtime.get() << '.';
-
-		runtime->_buffer_detection = &device->_buffer_detection;
 
 		swapchain_proxy = new DXGISwapChain(device.get(), swapchain, std::move(runtime)); // Overwrite returned swapchain pointer with hooked object
 	}
@@ -133,11 +191,9 @@ static void init_reshade_runtime_d3d(T *&swapchain, unsigned int direct3d_versio
 	{
 		const com_ptr<D3D11Device> &device = reinterpret_cast<const com_ptr<D3D11Device> &>(device_proxy);
 
-		auto runtime = std::make_unique<reshade::d3d11::runtime_d3d11>(device->_orig, swapchain);
+		auto runtime = std::make_unique<reshade::d3d11::runtime_d3d11>(device->_orig, swapchain, &device->_immediate_context->_buffer_detection);
 		if (!runtime->on_init(desc))
 			LOG(ERROR) << "Failed to initialize Direct3D 11 runtime environment on runtime " << runtime.get() << '.';
-
-		runtime->_buffer_detection = &device->_immediate_context->_buffer_detection;
 
 		swapchain_proxy = new DXGISwapChain(device.get(), swapchain, std::move(runtime));
 	}
@@ -151,11 +207,9 @@ static void init_reshade_runtime_d3d(T *&swapchain, unsigned int direct3d_versio
 			if (hwnd != nullptr)
 				desc.OutputWindow = hwnd;
 
-			auto runtime = std::make_unique<reshade::d3d12::runtime_d3d12>(command_queue->_device->_orig, command_queue->_orig, swapchain3.get());
+			auto runtime = std::make_unique<reshade::d3d12::runtime_d3d12>(command_queue->_device->_orig, command_queue->_orig, swapchain3.get(), &command_queue->_device->_buffer_detection);
 			if (!runtime->on_init(desc))
 				LOG(ERROR) << "Failed to initialize Direct3D 12 runtime environment on runtime " << runtime.get() << '.';
-
-			runtime->_buffer_detection = &command_queue->_device->_buffer_detection;
 
 			swapchain_proxy = new DXGISwapChain(command_queue->_device, swapchain3.get(), std::move(runtime));
 		}
@@ -171,6 +225,13 @@ static void init_reshade_runtime_d3d(T *&swapchain, unsigned int direct3d_versio
 
 	if (swapchain_proxy != nullptr)
 	{
+		{ const reshade::ini_file config(g_reshade_config_path);
+
+			config.get("APP", "ForceVSync", swapchain_proxy->_force_vsync);
+			config.get("APP", "ForceResolution", swapchain_proxy->_force_resolution);
+			config.get("APP", "Force10BitFormat", swapchain_proxy->_force_10_bit_format);
+		}
+
 #if RESHADE_VERBOSE_LOG
 		LOG(INFO) << "Returning IDXGISwapChain" << swapchain_proxy->_interface_version << " object " << swapchain_proxy << '.';
 #endif
@@ -190,14 +251,14 @@ HRESULT STDMETHODCALLTYPE IDXGIFactory_CreateSwapChain(IDXGIFactory *pFactory, I
 	if (pDevice == nullptr || pDesc == nullptr || ppSwapChain == nullptr)
 		return DXGI_ERROR_INVALID_CALL;
 
-	dump_swapchain_desc(*pDesc);
+	DXGI_SWAP_CHAIN_DESC desc = *pDesc;
+	dump_and_modify_swapchain_desc(desc);
 
 	com_ptr<IUnknown> device_proxy;
-	const unsigned int direct3d_version =
-		query_device(pDevice, device_proxy);
+	const UINT direct3d_version = query_device(pDevice, device_proxy);
 
 	g_in_dxgi_runtime = true;
-	const HRESULT hr = reshade::hooks::call(IDXGIFactory_CreateSwapChain, vtable_from_instance(pFactory) + 10)(pFactory, pDevice, pDesc, ppSwapChain);
+	const HRESULT hr = reshade::hooks::call(IDXGIFactory_CreateSwapChain, vtable_from_instance(pFactory) + 10)(pFactory, pDevice, &desc, ppSwapChain);
 	g_in_dxgi_runtime = false;
 	if (FAILED(hr))
 	{
@@ -225,14 +286,19 @@ HRESULT STDMETHODCALLTYPE IDXGIFactory2_CreateSwapChainForHwnd(IDXGIFactory2 *pF
 	if (pDevice == nullptr || pDesc == nullptr || ppSwapChain == nullptr)
 		return DXGI_ERROR_INVALID_CALL;
 
-	dump_swapchain_desc(*pDesc);
+	DXGI_SWAP_CHAIN_DESC1 desc = *pDesc;
+	DXGI_SWAP_CHAIN_FULLSCREEN_DESC fullscreen_desc = {};
+	if (pFullscreenDesc != nullptr)
+		fullscreen_desc = *pFullscreenDesc;
+	else
+		fullscreen_desc.Windowed = TRUE;
+	dump_and_modify_swapchain_desc(desc, fullscreen_desc);
 
 	com_ptr<IUnknown> device_proxy;
-	const unsigned int direct3d_version =
-		query_device(pDevice, device_proxy);
+	const UINT direct3d_version = query_device(pDevice, device_proxy);
 
 	g_in_dxgi_runtime = true;
-	const HRESULT hr = reshade::hooks::call(IDXGIFactory2_CreateSwapChainForHwnd, vtable_from_instance(pFactory) + 15)(pFactory, pDevice, hWnd, pDesc, pFullscreenDesc, pRestrictToOutput, ppSwapChain);
+	const HRESULT hr = reshade::hooks::call(IDXGIFactory2_CreateSwapChainForHwnd, vtable_from_instance(pFactory) + 15)(pFactory, pDevice, hWnd, &desc, fullscreen_desc.Windowed ? nullptr : &fullscreen_desc, pRestrictToOutput, ppSwapChain);
 	g_in_dxgi_runtime = false;
 	if (FAILED(hr))
 	{
@@ -258,14 +324,15 @@ HRESULT STDMETHODCALLTYPE IDXGIFactory2_CreateSwapChainForCoreWindow(IDXGIFactor
 	if (pDevice == nullptr || pDesc == nullptr || ppSwapChain == nullptr)
 		return DXGI_ERROR_INVALID_CALL;
 
-	dump_swapchain_desc(*pDesc);
+	DXGI_SWAP_CHAIN_DESC1 desc = *pDesc;
+	DXGI_SWAP_CHAIN_FULLSCREEN_DESC fullscreen_desc; // UWP applications cannot be set into fullscreen mode
+	dump_and_modify_swapchain_desc(desc, fullscreen_desc);
 
 	com_ptr<IUnknown> device_proxy;
-	const unsigned int direct3d_version =
-		query_device(pDevice, device_proxy);
+	const UINT direct3d_version = query_device(pDevice, device_proxy);
 
 	g_in_dxgi_runtime = true;
-	const HRESULT hr = reshade::hooks::call(IDXGIFactory2_CreateSwapChainForCoreWindow, vtable_from_instance(pFactory) + 16)(pFactory, pDevice, pWindow, pDesc, pRestrictToOutput, ppSwapChain);
+	const HRESULT hr = reshade::hooks::call(IDXGIFactory2_CreateSwapChainForCoreWindow, vtable_from_instance(pFactory) + 16)(pFactory, pDevice, pWindow, &desc, pRestrictToOutput, ppSwapChain);
 	g_in_dxgi_runtime = false;
 	if (FAILED(hr))
 	{
@@ -295,14 +362,15 @@ HRESULT STDMETHODCALLTYPE IDXGIFactory2_CreateSwapChainForComposition(IDXGIFacto
 	if (pDevice == nullptr || pDesc == nullptr || ppSwapChain == nullptr)
 		return DXGI_ERROR_INVALID_CALL;
 
-	dump_swapchain_desc(*pDesc);
+	DXGI_SWAP_CHAIN_DESC1 desc = *pDesc;
+	DXGI_SWAP_CHAIN_FULLSCREEN_DESC fullscreen_desc; // Composition swap chains cannot be set into fullscreen mode
+	dump_and_modify_swapchain_desc(desc, fullscreen_desc);
 
 	com_ptr<IUnknown> device_proxy;
-	const unsigned int direct3d_version =
-		query_device(pDevice, device_proxy);
+	const UINT direct3d_version = query_device(pDevice, device_proxy);
 
 	g_in_dxgi_runtime = true;
-	const HRESULT hr = reshade::hooks::call(IDXGIFactory2_CreateSwapChainForComposition, vtable_from_instance(pFactory) + 24)(pFactory, pDevice, pDesc, pRestrictToOutput, ppSwapChain);
+	const HRESULT hr = reshade::hooks::call(IDXGIFactory2_CreateSwapChainForComposition, vtable_from_instance(pFactory) + 24)(pFactory, pDevice, &desc, pRestrictToOutput, ppSwapChain);
 	g_in_dxgi_runtime = false;
 	if (FAILED(hr))
 	{

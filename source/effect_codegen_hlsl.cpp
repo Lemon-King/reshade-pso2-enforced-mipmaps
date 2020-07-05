@@ -186,8 +186,8 @@ private:
 					s += std::signbit(data.as_float[i]) ? "1.#INF" : "-1.#INF";
 					break;
 				}
-				char temp[64] = "";
-				std::snprintf(temp, sizeof(temp), "%.8f", data.as_float[i]);
+				char temp[64]; // Will be null-terminated by snprintf
+				std::snprintf(temp, sizeof(temp), "%1.8e", data.as_float[i]);
 				s += temp;
 				break;
 			}
@@ -416,7 +416,7 @@ private:
 		{
 			info.size = info.type.components() * 4;
 			if (info.type.is_array())
-				info.size += info.type.array_length;
+				info.size *= info.type.array_length;
 
 			std::string &code = _blocks.at(_current_block);
 

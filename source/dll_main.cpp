@@ -12,9 +12,10 @@
 HMODULE g_module_handle = nullptr;
 
 std::filesystem::path g_reshade_dll_path;
+std::filesystem::path g_reshade_config_path;
 std::filesystem::path g_target_executable_path;
 
-extern std::filesystem::path get_system_path()
+std::filesystem::path get_system_path()
 {
 	static std::filesystem::path system_path;
 	if (system_path.empty())
@@ -65,9 +66,10 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine, int nCmdShow
 
 	g_module_handle = hInstance;
 	g_reshade_dll_path = get_module_path(nullptr);
+	g_reshade_config_path = g_reshade_dll_path.parent_path() / L"ReShade.ini";
 	g_target_executable_path = get_module_path(nullptr);
 
-	log::open(std::filesystem::path(g_reshade_dll_path).replace_extension(".log"));
+	log::open(std::filesystem::path(g_reshade_dll_path).replace_extension(L".log"));
 
 	hooks::register_module("user32.dll");
 
@@ -126,10 +128,10 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine, int nCmdShow
 		pp.PresentationInterval = D3DPRESENT_INTERVAL_ONE;
 
 		// Initialize Direct3D 9
-		com_ptr<IDirect3D9> d3d(Direct3DCreate9(D3D_SDK_VERSION), true);
-		com_ptr<IDirect3DDevice9> device;
-
-		HCHECK(d3d->CreateDevice(D3DADAPTER_DEFAULT, D3DDEVTYPE_HAL, window_handle, D3DCREATE_HARDWARE_VERTEXPROCESSING, &pp, &device));
+		com_ptr<IDirect3D9Ex> d3d;
+		HCHECK(Direct3DCreate9Ex(D3D_SDK_VERSION, &d3d));
+		com_ptr<IDirect3DDevice9Ex> device;
+		HCHECK(d3d->CreateDeviceEx(D3DADAPTER_DEFAULT, D3DDEVTYPE_HAL, window_handle, D3DCREATE_HARDWARE_VERTEXPROCESSING, &pp, nullptr, &device));
 
 		while (msg.message != WM_QUIT)
 		{
@@ -142,7 +144,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR lpCmdLine, int nCmdShow
 				pp.BackBufferWidth = s_resize_w;
 				pp.BackBufferHeight = s_resize_h;
 
-				HCHECK(device->Reset(&pp));
+				HCHECK(device->ResetEx(&pp, nullptr));
 
 				s_resize_w = s_resize_h = 0;
 			}
@@ -752,9 +754,11 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD fdwReason, LPVOID)
 	case DLL_PROCESS_ATTACH:
 		g_module_handle = hModule;
 		g_reshade_dll_path = get_module_path(hModule);
+		g_reshade_config_path = g_reshade_dll_path;
+		g_reshade_config_path.replace_extension(L".ini");
 		g_target_executable_path = get_module_path(nullptr);
 
-		log::open(std::filesystem::path(g_reshade_dll_path).replace_extension(".log"));
+		log::open(std::filesystem::path(g_reshade_dll_path).replace_extension(L".log"));
 
 #  ifdef WIN64
 		LOG(INFO) << "Initializing crosire's ReShade version '" VERSION_STRING_FILE "' (64-bit) built on '" VERSION_DATE " " VERSION_TIME "' loaded from " << g_reshade_dll_path << " into " << g_target_executable_path << " ...";
@@ -762,12 +766,22 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD fdwReason, LPVOID)
 		LOG(INFO) << "Initializing crosire's ReShade version '" VERSION_STRING_FILE "' (32-bit) built on '" VERSION_DATE " " VERSION_TIME "' loaded from " << g_reshade_dll_path << " into " << g_target_executable_path << " ...";
 #  endif
 
+		// First look for an API-named configuration file
+		if (std::error_code ec; !std::filesystem::exists(g_reshade_config_path, ec))
+			// On failure check for a "ReShade.ini" in the application directory
+			g_reshade_config_path = g_target_executable_path.parent_path() / L"ReShade.ini";
+		if (std::error_code ec; !std::filesystem::exists(g_reshade_config_path, ec))
+			// If neither exist create a "ReShade.ini" in the ReShade DLL directory
+			g_reshade_config_path = g_reshade_dll_path.parent_path() / L"ReShade.ini";
+
 #  ifndef NDEBUG
 		g_exception_handler_handle = AddVectoredExceptionHandler(1, [](PEXCEPTION_POINTERS ex) -> LONG {
-			// Ignore debugging exceptions
+			// Ignore debugging and some common language exceptions
 			if (const DWORD code = ex->ExceptionRecord->ExceptionCode;
 				code == CONTROL_C_EXIT || code == 0x406D1388 /* SetThreadName */ ||
-				code == DBG_PRINTEXCEPTION_C || code == DBG_PRINTEXCEPTION_WIDE_C)
+				code == DBG_PRINTEXCEPTION_C || code == DBG_PRINTEXCEPTION_WIDE_C ||
+				code == 0xE0434352 /* CLR exception */ ||
+				code == 0xE06D7363 /* Visual C++ exception */)
 				goto continue_search;
 
 			// Create dump with exception information for the first 100 occurrences

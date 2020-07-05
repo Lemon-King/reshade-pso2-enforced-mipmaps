@@ -6,8 +6,8 @@
 #include "dll_log.hpp"
 #include "hook_manager.hpp"
 #include "runtime_vk.hpp"
-#include "vk_layer.h"
-#include "vk_layer_dispatch_table.h"
+#include <vk_layer.h>
+#include <vk_layer_dispatch_table.h>
 #include "format_utils.hpp"
 #include "lockfree_table.hpp"
 
@@ -112,6 +112,10 @@ VkResult VKAPI_CALL vkCreateInstance(const VkInstanceCreateInfo *pCreateInfo, co
 	if (trampoline == nullptr) // Unable to resolve next 'vkCreateInstance' function in the call chain
 		return VK_ERROR_INITIALIZATION_FAILED;
 
+	LOG(INFO) << "> Dumping enabled instance extensions:";
+	for (uint32_t i = 0; i < pCreateInfo->enabledExtensionCount; ++i)
+		LOG(INFO) << "  " << pCreateInfo->ppEnabledExtensionNames[i];
+
 	VkApplicationInfo app_info { VK_STRUCTURE_TYPE_APPLICATION_INFO };
 	if (pCreateInfo->pApplicationInfo != nullptr)
 		app_info = *pCreateInfo->pApplicationInfo;
@@ -141,7 +145,7 @@ VkResult VKAPI_CALL vkCreateInstance(const VkInstanceCreateInfo *pCreateInfo, co
 	// Initialize the instance dispatch table
 	VkLayerInstanceDispatchTable &dispatch_table = s_instance_dispatch.emplace(dispatch_key_from_handle(instance));
 	dispatch_table.GetInstanceProcAddr = gipa;
-#define INIT_INSTANCE_PROC(name) dispatch_table.name = (PFN_vk##name)gipa(instance, "vk" #name)
+#define INIT_INSTANCE_PROC(name) dispatch_table.name = reinterpret_cast<PFN_vk##name>(gipa(instance, "vk" #name))
 	// ---- Core 1_0 commands
 	INIT_INSTANCE_PROC(DestroyInstance);
 	INIT_INSTANCE_PROC(EnumeratePhysicalDevices);
@@ -241,6 +245,10 @@ VkResult VKAPI_CALL vkCreateDevice(VkPhysicalDevice physicalDevice, const VkDevi
 
 	if (trampoline == nullptr) // Unable to resolve next 'vkCreateDevice' function in the call chain
 		return VK_ERROR_INITIALIZATION_FAILED;
+
+	LOG(INFO) << "> Dumping enabled device extensions:";
+	for (uint32_t i = 0; i < pCreateInfo->enabledExtensionCount; ++i)
+		LOG(INFO) << "  " << pCreateInfo->ppEnabledExtensionNames[i];
 
 	auto enum_queue_families = s_instance_dispatch.at(dispatch_key_from_handle(physicalDevice)).GetPhysicalDeviceQueueFamilyProperties;
 	assert(enum_queue_families != nullptr);
@@ -368,7 +376,7 @@ VkResult VKAPI_CALL vkCreateDevice(VkPhysicalDevice physicalDevice, const VkDevi
 	// Initialize the device dispatch table
 	VkLayerDispatchTable &dispatch_table = device_data.dispatch_table;
 	dispatch_table.GetDeviceProcAddr = gdpa;
-#define INIT_DEVICE_PROC(name) dispatch_table.name = (PFN_vk##name)gdpa(device, "vk" #name)
+#define INIT_DEVICE_PROC(name) dispatch_table.name = reinterpret_cast<PFN_vk##name>(gdpa(device, "vk" #name))
 	// ---- Core 1_0 commands
 	INIT_DEVICE_PROC(DestroyDevice);
 	INIT_DEVICE_PROC(GetDeviceQueue);
@@ -460,6 +468,10 @@ VkResult VKAPI_CALL vkCreateDevice(VkPhysicalDevice physicalDevice, const VkDevi
 	INIT_DEVICE_PROC(GetBufferMemoryRequirements2);
 	INIT_DEVICE_PROC(GetImageMemoryRequirements2);
 	INIT_DEVICE_PROC(GetDeviceQueue2);
+	// ---- Core 1_2 commands
+	INIT_DEVICE_PROC(CreateRenderPass2);
+	if (dispatch_table.CreateRenderPass2 == nullptr) // Try the KHR version if the core version does not exist
+		dispatch_table.CreateRenderPass2  = reinterpret_cast<PFN_vkCreateRenderPass2KHR>(gdpa(device, "vkCreateRenderPass2KHR"));
 	// ---- VK_KHR_swapchain extension commands
 	INIT_DEVICE_PROC(CreateSwapchainKHR);
 	INIT_DEVICE_PROC(DestroySwapchainKHR);
@@ -600,9 +612,8 @@ VkResult VKAPI_CALL vkCreateSwapchainKHR(VkDevice device, const VkSwapchainCreat
 		{
 			runtime = new reshade::vulkan::runtime_vk(
 				device, device_data.physical_device, device_data.graphics_queue_family_index,
-				s_instance_dispatch.at(dispatch_key_from_handle(device_data.physical_device)), device_data.dispatch_table);
-
-			runtime->_buffer_detection = &device_data.buffer_detection;
+				s_instance_dispatch.at(dispatch_key_from_handle(device_data.physical_device)), device_data.dispatch_table,
+				&device_data.buffer_detection);
 		}
 
 		// Look up window handle from surface
@@ -781,6 +792,36 @@ VkResult VKAPI_CALL vkCreateRenderPass(VkDevice device, const VkRenderPassCreate
 		if (ds_reference != nullptr && ds_reference->attachment != VK_ATTACHMENT_UNUSED)
 		{
 			const VkAttachmentDescription &ds_attachment = pCreateInfo->pAttachments[ds_reference->attachment];
+			subpass_data.final_depthstencil_layout = ds_attachment.finalLayout;
+			subpass_data.depthstencil_attachment_index = ds_reference->attachment;
+		}
+	}
+
+	return VK_SUCCESS;
+}
+VkResult VKAPI_CALL vkCreateRenderPass2(VkDevice device, const VkRenderPassCreateInfo2 *pCreateInfo, const VkAllocationCallbacks *pAllocator, VkRenderPass *pRenderPass)
+{
+	assert(pCreateInfo != nullptr && pRenderPass != nullptr);
+
+	GET_DEVICE_DISPATCH_PTR(CreateRenderPass2, device);
+	const VkResult result = trampoline(device, pCreateInfo, pAllocator, pRenderPass);
+	if (result != VK_SUCCESS)
+	{
+		LOG(WARN) << "vkCreateRenderPass2 failed with error code " << result << '!';
+		return result;
+	}
+
+	auto &renderpass_data = s_renderpass_data.emplace(*pRenderPass);
+
+	// Search for the first pass using a depth-stencil attachment
+	for (uint32_t subpass = 0; subpass < pCreateInfo->subpassCount; ++subpass)
+	{
+		auto &subpass_data = renderpass_data.emplace_back();
+
+		const VkAttachmentReference2 *const ds_reference = pCreateInfo->pSubpasses[subpass].pDepthStencilAttachment;
+		if (ds_reference != nullptr && ds_reference->attachment != VK_ATTACHMENT_UNUSED)
+		{
+			const VkAttachmentDescription2 &ds_attachment = pCreateInfo->pAttachments[ds_reference->attachment];
 			subpass_data.final_depthstencil_layout = ds_attachment.finalLayout;
 			subpass_data.depthstencil_attachment_index = ds_reference->attachment;
 		}
@@ -989,6 +1030,9 @@ VK_LAYER_EXPORT PFN_vkVoidFunction VKAPI_CALL vkGetDeviceProcAddr(VkDevice devic
 		return reinterpret_cast<PFN_vkVoidFunction>(vkDestroyImageView);
 	if (0 == strcmp(pName, "vkCreateRenderPass"))
 		return reinterpret_cast<PFN_vkVoidFunction>(vkCreateRenderPass);
+	if (0 == strcmp(pName, "vkCreateRenderPass2") ||
+		0 == strcmp(pName, "vkCreateRenderPass2KHR"))
+		return reinterpret_cast<PFN_vkVoidFunction>(vkCreateRenderPass2);
 	if (0 == strcmp(pName, "vkDestroyRenderPass"))
 		return reinterpret_cast<PFN_vkVoidFunction>(vkDestroyRenderPass);
 	if (0 == strcmp(pName, "vkCreateFramebuffer"))

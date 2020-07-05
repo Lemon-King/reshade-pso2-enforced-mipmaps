@@ -66,8 +66,8 @@ namespace ReShade.Setup
 				}
 
 				zip = new ZipArchive(output, ZipArchiveMode.Read, false);
-				packagesIni = new IniFile(assembly.GetManifestResourceStream("ReShade.Setup.EffectPackages.ini"));
-				compatibilityIni = new IniFile(assembly.GetManifestResourceStream("ReShade.Setup.Compatibility.ini"));
+				packagesIni = new IniFile(assembly.GetManifestResourceStream("ReShade.Setup.Config.EffectPackages.ini"));
+				compatibilityIni = new IniFile(assembly.GetManifestResourceStream("ReShade.Setup.Config.Compatibility.ini"));
 			}
 			catch
 			{
@@ -647,7 +647,7 @@ In that event here are some steps you can try to resolve this:
 
 				ZipFile.ExtractToDirectory(downloadPath, tempPath);
 
-				// First check for a standard folder name
+				// First check for a standard directory name
 				string tempPathShaders = Directory.GetDirectories(tempPath, "Shaders", SearchOption.AllDirectories).FirstOrDefault();
 				string tempPathTextures = Directory.GetDirectories(tempPath, "Textures", SearchOption.AllDirectories).FirstOrDefault();
 				string targetPathShaders = Path.Combine(Path.GetDirectoryName(targetPath), package.InstallPath);
