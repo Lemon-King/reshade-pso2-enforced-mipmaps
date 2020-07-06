@@ -23,7 +23,6 @@ namespace reshade::d3d9
 
 		bool capture_screenshot(uint8_t *buffer) const override;
 
-		buffer_detection *_buffer_detection = nullptr;
 		UINT _texture_filering_level = 5;
 		UINT _texture_bias = 0;
 		bool _texture_allow_player_atlas_mipmap_generation = true;
