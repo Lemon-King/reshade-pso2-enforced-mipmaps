@@ -521,6 +521,7 @@ void reshade::runtime::draw_ui()
 		else
 		{
 			ImGui::TextUnformatted("ReShade " VERSION_STRING_FILE " by crosire");
+			ImGui::TextUnformatted("Modifications for PSO2 by Lemon King");
 
 			if (_needs_update)
 			{
