@@ -327,8 +327,8 @@ HRESULT STDMETHODCALLTYPE Direct3DDevice9::CreateTexture(UINT Width, UINT Height
 		(Width == 1024 && Height == 1024) ||	// Cast Parts
 		(Width == 512 && Height == 1024) ||	
 		(Width == 512 && Height == 512) ||
-		(Width == 256 && Height == 256) ||
-		(Width == 128 && Height == 128) ||
+		(Width == 256 && Height == 256 && Levels == 1) ||
+		(Width == 128 && Height == 128 && Levels == 1) ||
 		(Width == 128 && Height == 64) ||
 		(Width == 64 && Height == 64);
 	if (_implicit_swapchain->_runtime->_texture_allow_player_atlas_mipmap_generation && Usage <= D3DUSAGE_RENDERTARGET && Format == D3DFMT_A8R8G8B8 && is_atlas_resolution && Pool == 0) {
