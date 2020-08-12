@@ -1,6 +1,8 @@
 ReShade - Phantasy Star 2 Graphics Override
 =======
 
+As of [GShade 3.0](https://github.com/Mortalitas/GShade/releases/tag/v3.0.0) the unique texture filtering improvements of this project has been merged and as of now I can say go use GShade.
+
 This is a modification of [ReShade](https://reshade.me/) for Phantasy Star Online 2. It adds player character mipmaps, improved texture filtering quality, and forces generation of missing [mipmaps](https://en.wikipedia.org/wiki/Mipmap) for all textures.
 
 Configuation can be found under a new tab in Reshade's UI.
